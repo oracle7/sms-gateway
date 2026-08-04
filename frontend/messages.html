@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <title>Messages - SMS Gateway</title>
+    <style>
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+
+        /* New Animations and Styles */
+        @keyframes flash-banner {
+            0%, 100% { background-color: #dc2626; } /* red-600 */
+            50% { background-color: #991b1b; } /* red-800 */
+        }
+        .flashing { animation: flash-banner 1s infinite; }
+        
+        .unread-thread { 
+            border-left-color: #dc2626 !important; 
+            background-color: #fef2f2 !important; 
+        }
+    </style>
+</head>
+<body class="bg-gray-100 h-screen flex flex-col overflow-hidden relative">
+    
+    <!-- Audio Element for Notifications -->
+    <audio id="notif-sound" src="/static/airport-ding.mp3" preload="auto"></audio>
+
+    <div id="persistentToast" class="fixed top-0 left-0 right-0 bg-red-600 text-white text-center py-4 text-xl font-bold shadow-2xl transform -translate-y-full transition-transform duration-500 z-[100] flex items-center justify-center gap-3">
+        <svg class="w-8 h-8 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path>
+        </svg>
+        <span>New Message Received!</span>
+    </div>
+
+    <div id="header-placeholder"></div>
+
+    <div class="flex flex-1 overflow-hidden">
+        
+        <div class="w-1/3 max-w-sm bg-white border-r flex flex-col">
+            <div class="p-4 bg-gray-50 border-b flex justify-between items-center">
+                <span class="font-semibold text-gray-700">Active Threads</span>
+                <button onclick="openNewThreadModal()" class="text-sm bg-blue-100 text-blue-700 hover:bg-blue-200 px-3 py-1 rounded transition font-medium">
+                    + New
+                </button>
+            </div>
+            
+            <div class="p-3 bg-white border-b">
+                <input type="text" id="searchInput" onkeyup="filterSidebar()" placeholder="Search messages, names, or numbers..." class="w-full border border-gray-300 rounded p-2 text-sm focus:outline-blue-500">
+            </div>
+            
+            <div id="threadList" class="flex-1 overflow-y-auto"></div>
+        </div>
+
+        <div class="flex-1 bg-gray-50 flex flex-col relative">
+            <div id="chatHeader" class="p-4 bg-white border-b flex items-center text-lg font-semibold text-gray-800 shadow-sm h-[68px]">
+                <span class="text-gray-400 italic text-sm">Select or start a thread to view messages</span>
+            </div>
+
+            <div id="chatContainer" class="flex-1 overflow-y-auto p-6 space-y-4"></div>
+
+            <div id="errorBanner" class="hidden absolute bottom-24 left-4 right-4 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded shadow-lg flex justify-between items-center z-20">
+                <div class="flex items-center gap-2">
+                    <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd"></path></svg>
+                    <span id="errorMessage" class="font-medium">Failed to send message.</span>
+                </div>
+                <button onclick="dismissError()" class="text-red-700 font-bold hover:text-red-900 text-xl leading-none">&times;</button>
+            </div>
+
+            <div class="p-4 bg-white border-t flex gap-3 z-10 relative items-end">
+                <textarea id="messageInput" disabled rows="1"
+                    class="flex-1 border border-gray-300 rounded-md p-3 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-200 disabled:text-gray-500 transition resize-none min-h-[48px] max-h-[150px] overflow-y-auto"
+                    placeholder="Type a message... (Shift+Enter for new line)"
+                    onkeydown="handleKeyPress(event)"
+                    oninput="autoResize(this)"></textarea>
+                <button id="sendBtn" disabled
+                    class="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-md font-medium disabled:opacity-50 disabled:cursor-not-allowed transition h-[48px]"
+                    onclick="sendMessage()">
+                    Send
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- New Thread and Contact Modals -->
+    <div id="newThreadModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
+        <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
+            <h2 class="text-xl font-bold mb-4 text-gray-800">Start New Message</h2>
+            <p class="text-sm text-gray-600 mb-4">Select a contact or type a new number.</p>
+            <input type="text" id="newThreadNumber" list="contactOptions" class="w-full border border-gray-300 rounded p-2 mb-4 focus:outline-blue-500" placeholder="Search contact or type number" onkeypress="handleNewThreadKeyPress(event)">
+            <datalist id="contactOptions"></datalist>
+            <div class="flex justify-end gap-2">
+                <button onclick="closeNewThreadModal()" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">Cancel</button>
+                <button onclick="startNewThread()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium">Start Chat</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="addContactModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
+        <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
+            <h2 class="text-xl font-bold mb-4 text-gray-800">Add to Contacts</h2>
+            <p id="addContactSubtitle" class="text-sm text-gray-600 mb-4"></p>
+            <input type="hidden" id="addContactNumberInput">
+            <input type="text" id="addContactNameInput" class="w-full border border-gray-300 rounded p-2 mb-4 focus:outline-blue-500" placeholder="Enter contact name" onkeypress="if(event.key === 'Enter') saveContact()">
+            <div class="flex justify-end gap-2">
+                <button onclick="closeAddContactModal()" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">Cancel</button>
+                <button onclick="saveContact()" id="saveContactBtn" class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded font-medium">Save Contact</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global App States
+        const API_URL = window.location.origin;
+        let allMessages = [];
+        let contactsMap = {};
+        let currentActiveNumber = null;
+        let pollInterval = null;
+        let unreadThreads = new Set(); // Local state to track unread threads
+
+        // UI Event Trackers for Background Alerts
+        let originalTitle = document.title;
+        let titleFlashInterval = null;
+        let isWindowFocused = true;
+        let toastTimeout = null;
+        const notifSound = document.getElementById('notif-sound');
+
+        window.onfocus = () => {
+            isWindowFocused = true;
+            clearInterval(titleFlashInterval);
+            document.title = originalTitle;
+
+            const toast = document.getElementById('persistentToast');
+            if (toast && !toast.classList.contains('-translate-y-full')) {
+                toastTimeout = setTimeout(() => {
+                    toast.classList.add('-translate-y-full');
+                    toast.classList.remove('flashing'); // Remove flash when closing
+                }, 3000);
+            }
+        };
+
+        window.onblur = () => {
+            isWindowFocused = false;
+            if (toastTimeout) {
+                clearTimeout(toastTimeout);
+            }
+        };
+
+        function triggerAlert() {
+            const toast = document.getElementById('persistentToast');
+            if (toast) {
+                toast.classList.remove('-translate-y-full');
+                toast.classList.add('flashing'); // Activate animation
+            }
+
+            // Play notification sound
+            if (notifSound) {
+                notifSound.play().catch(e => console.log("Audio play blocked by browser. User interaction needed first."));
+            }
+
+            if (!isWindowFocused) {
+                clearInterval(titleFlashInterval);
+                let showNew = true;
+                titleFlashInterval = setInterval(() => {
+                    document.title = showNew ? "?? New Message!" : originalTitle;
+                    showNew = !showNew;
+                }, 1000);
+            } else {
+                clearTimeout(toastTimeout);
+                toastTimeout = setTimeout(() => {
+                    toast.classList.add('-translate-y-full');
+                    toast.classList.remove('flashing');
+                }, 3000);
+            }
+        }
+
+        function escapeHTML(str) {
+            if (!str) return "";
+            return str.replace(/[&<>'"]/g, function(tag) {
+                const chars = { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' };
+                return chars[tag] || tag;
+            });
+        }
+
+        function escapeAttr(str) {
+            if (!str) return "";
+            return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        function normalizeNumber(num) {
+            if (!num) return "";
+            let cleaned = num.toString().replace(/\D/g, '');
+            if (cleaned.length === 11 && cleaned.startsWith('1')) {
+                cleaned = cleaned.substring(1);
+            }
+            return cleaned;
+        }
+
+        async function loadHeader() {
+            try {
+                const res = await fetch('/ui/header.html');
+                if (!res.ok) throw new Error('Header not found');
+                document.getElementById('header-placeholder').innerHTML = await res.text();
+                
+                const currentPage = window.location.pathname.split('/').pop() || 'messages.html';
+                document.querySelectorAll('.nav-link').forEach(link => {
+                    if (link.getAttribute('data-target') === currentPage) {
+                        link.classList.remove('text-gray-300');
+                        link.classList.add('text-blue-400', 'font-bold');
+                    }
+                });
+            } catch (e) {
+                console.error('Failed to load header:', e);
+            }
+        }
+
+        async function init() {
+            await loadHeader(); 
+            await fetchContacts();
+            await fetchMessages();
+
+            const urlParams = new URLSearchParams(window.location.search);
+            const queryNumber = urlParams.get('number');
+            if (queryNumber) {
+                selectThread(normalizeNumber(queryNumber));
+                window.history.replaceState({}, document.title, "messages.html");
+            }
+
+            pollInterval = setInterval(pollMessages, 5000);
+        }
+
+        async function fetchContacts() {
+            try {
+                const res = await fetch(`${API_URL}/contacts/`);
+                const data = await res.json();
+                const datalist = document.getElementById('contactOptions');
+                datalist.innerHTML = ''; 
+                
+                data.forEach(c => { 
+                    const normNum = normalizeNumber(c.phone_number);
+                    contactsMap[normNum] = c.name; 
+                    datalist.innerHTML += `<option value="${normNum}">${c.name}</option>`;
+                });
+            } catch (e) {
+                console.error("Failed to fetch contacts", e);
+            }
+        }
+
+        async function fetchMessages() {
+            try {
+                const res = await fetch(`${API_URL}/messages/?limit=500`); 
+                const data = await res.json();
+                
+                allMessages = data.map(msg => ({
+                    ...msg,
+                    normalized_number: normalizeNumber(msg.raw_number)
+                }));
+                
+                filterSidebar();
+                
+                if (currentActiveNumber) {
+                    renderChat(currentActiveNumber);
+                }
+            } catch (e) {
+                console.error("Failed to fetch messages", e);
+            }
+        }
+
+        async function pollMessages() {
+            try {
+                const res = await fetch(`${API_URL}/messages/?limit=500`);
+                const data = await res.json();
+
+                if (!data || data.length === 0) return;
+
+                const hasNewMessage = allMessages.length === 0 || data[0].id !== allMessages[0].id;
+
+                if (hasNewMessage) {
+                    const existingIds = new Set(allMessages.map(m => m.id));
+                    const newMessages = data.filter(m => !existingIds.has(m.id));
+                    const hasNewInbound = newMessages.some(m => m.is_inbound);
+
+                    // Add new inbound threads to Unread, if not currently active
+                    newMessages.forEach(m => {
+                        const num = normalizeNumber(m.raw_number);
+                        if (m.is_inbound && num !== currentActiveNumber) {
+                            unreadThreads.add(num);
+                        }
+                    });
+
+                    allMessages = data.map(msg => ({
+                        ...msg,
+                        normalized_number: normalizeNumber(msg.raw_number)
+                    }));
+
+                    const currentSearch = document.getElementById('searchInput').value.toLowerCase();
+                    renderSidebar(currentSearch, document.getElementById('deepSearchBtn') === null && currentSearch !== "");
+
+                    if (currentActiveNumber) {
+                        renderChat(currentActiveNumber);
+                    }
+
+                    if (hasNewInbound && existingIds.size > 0) {
+                        triggerAlert();
+                    }
+                }
+            } catch (e) {
+                console.error("Polling failed", e);
+            }
+        }
+
+        function filterSidebar() {
+            const term = document.getElementById('searchInput').value.toLowerCase();
+            renderSidebar(term, false);
+        }
+
+        async function executeDeepSearch() {
+            const term = document.getElementById('searchInput').value.trim();
+            if (!term) return;
+
+            const btn = document.getElementById('deepSearchBtn');
+            btn.innerText = "Searching server...";
+            btn.disabled = true;
+
+            try {
+                const res = await fetch(`${API_URL}/messages/search?query=${encodeURIComponent(term)}`);
+                if (!res.ok) throw new Error("Search failed");
+                const searchResults = await res.json();
+                
+                const existingIds = new Set(allMessages.map(m => m.id));
+                const newMessages = searchResults
+                    .filter(m => !existingIds.has(m.id))
+                    .map(msg => ({
+                        ...msg,
+                        normalized_number: normalizeNumber(msg.raw_number)
+                    }));
+                
+                allMessages = [...allMessages, ...newMessages];
+                allMessages.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+                
+                renderSidebar(term.toLowerCase(), true);
+                
+                if (currentActiveNumber) {
+                    renderChat(currentActiveNumber);
+                }
+            } catch (e) {
+                showError("Server search failed or endpoint not reachable.");
+                btn.innerText = `Search server history for "${term}"...`;
+                btn.disabled = false;
+            }
+        }
+
+        function renderSidebar(searchTerm = "", serverSearched = false) {
+            const threadList = document.getElementById('threadList');
+            const threads = {};
+            const orderedNumbers = [];
+
+            allMessages.forEach(msg => {
+                const num = msg.normalized_number;
+                if (!threads[num]) {
+                    threads[num] = msg;
+                    orderedNumbers.push(num);
+                }
+            });
+
+            if (currentActiveNumber && !orderedNumbers.includes(currentActiveNumber)) {
+                orderedNumbers.unshift(currentActiveNumber);
+                threads[currentActiveNumber] = { body: "No messages yet." };
+            }
+
+            const filteredNumbers = orderedNumbers.filter(num => {
+                if (!searchTerm) return true;
+                
+                const name = contactsMap[num] || "";
+                if (num.includes(searchTerm) || name.toLowerCase().includes(searchTerm)) return true;
+
+                const threadMsgs = allMessages.filter(m => m.normalized_number === num);
+                return threadMsgs.some(m => m.body.toLowerCase().includes(searchTerm));
+            });
+
+            let html = filteredNumbers.map(num => {
+                const msg = threads[num];
+                const hasContact = contactsMap[num] !== undefined;
+                
+                const nameDisplay = hasContact ? `<div class="font-semibold text-gray-800">${contactsMap[num]}</div>` : '';
+                const numberDisplay = hasContact 
+                    ? `<div class="text-xs text-gray-400 mb-1">${num}</div>` 
+                    : `<div class="font-semibold text-gray-800 mb-1">${num}</div>`;
+                
+                const preview = msg.body.length > 40 ? msg.body.substring(0, 40) + "..." : msg.body;
+                
+                // Visual logic for Unread vs Active
+                const isActive = (num === currentActiveNumber);
+                const isUnread = unreadThreads.has(num);
+                
+                let activeClass = 'hover:bg-gray-50 border-l-4 border-transparent';
+                let textClass = 'text-gray-500';
+
+                if (isActive) {
+                    activeClass = 'bg-blue-50 border-l-4 border-blue-600';
+                } else if (isUnread) {
+                    activeClass = 'unread-thread';
+                    textClass = 'text-red-700 font-semibold'; // More visible preview
+                }
+
+                return `
+                    <div onclick="selectThread('${num}')" class="p-4 border-b cursor-pointer transition ${activeClass}">
+                        ${nameDisplay}
+                        ${numberDisplay}
+                        <div class="text-sm ${textClass}">${preview}</div>
+                    </div>
+                `;
+            }).join('');
+
+            if (searchTerm && !serverSearched) {
+                html += `
+                    <div class="p-4 bg-gray-50 border-b">
+                        <button id="deepSearchBtn" onclick="executeDeepSearch()" class="w-full bg-blue-100 text-blue-700 hover:bg-blue-200 border border-blue-300 p-2 rounded transition font-medium text-sm shadow-sm">
+                            Search server history for "${searchTerm}"...
+                        </button>
+                    </div>
+                `;
+            }
+
+            if (filteredNumbers.length === 0 && !searchTerm) {
+                html = `<div class="p-6 text-center text-gray-400 text-sm">No threads found.</div>`;
+            }
+
+            threadList.innerHTML = html;
+        }
+
+        function selectThread(number) {
+            currentActiveNumber = number;
+            unreadThreads.delete(number); // Remove from unread list on click
+            dismissError(); 
+            
+            const currentSearch = document.getElementById('searchInput').value.toLowerCase();
+            renderSidebar(currentSearch, document.getElementById('deepSearchBtn') === null && currentSearch !== ""); 
+            renderChat(number);
+            
+            const input = document.getElementById('messageInput');
+            input.disabled = false;
+            document.getElementById('sendBtn').disabled = false;
+            input.focus();
+        }
+
+        function renderChat(number) {
+            const chatContainer = document.getElementById('chatContainer');
+            const chatHeader = document.getElementById('chatHeader');
+            
+            const isUnknown = contactsMap[number] === undefined;
+            const displayName = isUnknown ? number : contactsMap[number];
+            
+            let headerHtml = `<div>${displayName} <span class="text-xs text-gray-400 font-normal ml-2 tracking-wide">${number}</span>`;
+            if (isUnknown) {
+                headerHtml += `<button onclick="openAddContactModal('${number}')" class="ml-3 text-[11px] bg-green-50 hover:bg-green-100 text-green-700 px-2 py-1 rounded border border-green-200 transition shadow-sm font-medium"> + Add Contact </button>`;
+            }
+            headerHtml += `</div>`;
+            chatHeader.innerHTML = headerHtml;
+
+            const threadMessages = allMessages.filter(m => m.normalized_number === number).reverse();
+
+            if (threadMessages.length === 0) {
+                chatContainer.innerHTML = `<div class="text-center text-gray-400 mt-10">No messages yet. Send one to start the conversation.</div>`;
+                return;
+            }
+
+            chatContainer.innerHTML = threadMessages.map(msg => {
+                const isPatient = msg.is_inbound;
+                const alignClass = isPatient ? "justify-start" : "justify-end";
+                const bubbleClass = isPatient 
+                    ? "bg-white border border-gray-200 text-gray-800 rounded-bl-none" 
+                    : "bg-blue-600 text-white rounded-br-none shadow-sm";
+                
+                let ts = msg.timestamp;
+                if (ts && !/(Z|[+-]\d{2}:\d{2})$/.test(ts)) {
+                    ts += 'Z'; 
+                }
+                
+                const dateObj = new Date(ts);
+                const timeString = dateObj.toLocaleString([], {
+                    month: 'short', day: 'numeric', 
+                    hour: '2-digit', minute: '2-digit'
+                });
+
+                const copyBtn = `
+                    <button onclick="copyMessage(this)" data-text="${escapeAttr(msg.body)}" 
+                            class="opacity-0 group-hover:opacity-100 transition-opacity p-2 text-gray-400 hover:text-gray-600 flex items-center justify-center self-end mb-1 ${isPatient ? 'ml-1' : 'mr-1'}" title="Copy message">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                        </svg>
+                    </button>
+                `;
+
+                return `
+                    <div class="flex w-full ${alignClass} group">
+                        ${!isPatient ? copyBtn : ''}
+                        <div class="max-w-[70%] p-3 rounded-xl ${bubbleClass}">
+                            <div class="text-[15px] leading-relaxed whitespace-pre-wrap">${escapeHTML(msg.body)}</div>
+                            <div class="text-[11px] mt-1 text-right ${isPatient ? 'text-gray-400' : 'text-blue-200'}">${timeString}</div>
+                        </div>
+                        ${isPatient ? copyBtn : ''}
+                    </div>
+                `;
+            }).join('');
+
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function copyMessage(btnElement) {
+            const text = btnElement.getAttribute('data-text');
+            const originalHtml = btnElement.innerHTML;
+            
+            function showSuccess() {
+                btnElement.innerHTML = `<svg class="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>`;
+                setTimeout(() => { btnElement.innerHTML = originalHtml; }, 1500);
+            }
+            
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(text)
+                    .then(showSuccess)
+                    .catch(err => console.error("Modern copy failed: ", err));
+            } else {
+                try {
+                    const textArea = document.createElement("textarea");
+                    textArea.value = text;
+                    textArea.style.position = "fixed"; 
+                    textArea.style.top = "0";
+                    textArea.style.left = "0";
+                    textArea.style.opacity = "0";
+                    document.body.appendChild(textArea);
+                    
+                    textArea.focus();
+                    textArea.select();
+                    
+                    const successful = document.execCommand('copy');
+                    document.body.removeChild(textArea);
+                    
+                    if (successful) {
+                        showSuccess();
+                    } else {
+                        console.error("Fallback copy command was unsuccessful");
+                    }
+                } catch (err) {
+                    console.error("Fallback copy execution failed: ", err);
+                }
+            }
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const btn = document.getElementById('sendBtn');
+            const text = input.value.trim();
+            
+            if (!text || !currentActiveNumber) return;
+
+            input.disabled = true;
+            btn.disabled = true;
+            btn.innerText = "Sending...";
+            dismissError(); 
+
+            try {
+                const res = await fetch(`${API_URL}/messages/send`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        recipient: currentActiveNumber,
+                        body: text
+                    })
+                });
+
+                if (res.ok) {
+                    input.value = '';
+                    input.style.height = 'auto'; 
+                    await fetchMessages(); 
+                    input.disabled = false;
+                    btn.disabled = false;
+                    btn.innerText = "Send";
+                    input.focus();
+                } else {
+                    const err = await res.json();
+                    showError(`API Error: ${err.detail || 'Message rejected by carrier.'}`);
+                }
+            } catch (e) {
+                showError("Network error. Could not reach the gateway.");
+            }
+        }
+
+        function showError(msg) {
+            document.getElementById('errorMessage').innerText = msg;
+            document.getElementById('errorBanner').classList.remove('hidden');
+            document.getElementById('sendBtn').innerText = "Send"; 
+        }
+
+        function dismissError() {
+            document.getElementById('errorBanner').classList.add('hidden');
+            if (currentActiveNumber) {
+                const input = document.getElementById('messageInput');
+                input.disabled = false;
+                document.getElementById('sendBtn').disabled = false;
+                input.focus();
+            }
+        }
+
+        function openNewThreadModal() {
+            document.getElementById('newThreadNumber').value = '';
+            document.getElementById('newThreadModal').classList.remove('hidden');
+            document.getElementById('newThreadNumber').focus();
+        }
+
+        function closeNewThreadModal() {
+            document.getElementById('newThreadModal').classList.add('hidden');
+        }
+
+        function startNewThread() {
+            const rawInput = document.getElementById('newThreadNumber').value.trim();
+            const cleanNumber = normalizeNumber(rawInput); 
+            
+            if (cleanNumber.length < 10) {
+                alert("Please select a contact or enter a valid 10+ digit number.");
+                return;
+            }
+
+            closeNewThreadModal();
+            selectThread(cleanNumber);
+        }
+
+        function openAddContactModal(number) {
+            document.getElementById('addContactNumberInput').value = number;
+            document.getElementById('addContactSubtitle').innerText = `Assign a name for ${number}`;
+            document.getElementById('addContactNameInput').value = '';
+            document.getElementById('addContactModal').classList.remove('hidden');
+            document.getElementById('addContactNameInput').focus();
+        }
+
+        function closeAddContactModal() {
+            document.getElementById('addContactModal').classList.add('hidden');
+        }
+
+        async function saveContact() {
+            const nameInput = document.getElementById('addContactNameInput');
+            const number = document.getElementById('addContactNumberInput').value;
+            const name = nameInput.value.trim();
+            const btn = document.getElementById('saveContactBtn');
+
+            if (!name) return;
+
+            btn.innerText = "Saving...";
+            btn.disabled = true;
+
+            try {
+                const res = await fetch(`${API_URL}/contacts/`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: name,
+                        phone_number: number
+                    })
+                });
+
+                if (res.ok) {
+                    closeAddContactModal();
+                    await fetchContacts(); 
+                    filterSidebar();       
+                    renderChat(number);    
+                } else {
+                    alert("Failed to save contact. Ensure your API endpoint is correct.");
+                }
+            } catch (e) {
+                console.error("Error saving contact", e);
+                alert("Network error while saving contact.");
+            } finally {
+                btn.innerText = "Save Contact";
+                btn.disabled = false;
+            }
+        }
+
+        function autoResize(textarea) {
+            textarea.style.height = 'auto';
+            textarea.style.height = textarea.scrollHeight + 'px';
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault(); 
+                if (!document.getElementById('messageInput').disabled) {
+                    sendMessage();
+                }
+            }
+        }
+
+        function handleNewThreadKeyPress(event) {
+            if (event.key === "Enter") {
+                event.preventDefault(); 
+                startNewThread();
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
