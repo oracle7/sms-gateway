@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel
 from datetime import datetime
 
@@ -13,9 +13,17 @@ class ContactResponse(ContactBase):
     class Config:
         from_attributes = True
 
+class AttachmentBase(BaseModel):
+    media_url: str
+    content_type: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
 class MessageSend(BaseModel):
     recipient: str
-    body: str
+    body: Optional[str] = ""
+    media_urls: List[str] = []
 
 class MessageResponse(BaseModel):
     id: str  
@@ -24,6 +32,7 @@ class MessageResponse(BaseModel):
     timestamp: datetime
     is_inbound: bool
     status: Optional[str] = None
+    attachments: List[AttachmentBase] = []
 
     class Config:
         from_attributes = True
