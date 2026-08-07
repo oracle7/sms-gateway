@@ -133,4 +133,4 @@ Open your browser and navigate to `http://localhost:8000/messages`
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
+This project is licensed under the Mozilla Public License 2.0 - see the [LICENSE](./LICENSE) file for details.
