@@ -1,5 +1,8 @@
 ﻿# 📱 SMS & MMS Gateway Hub
 
+[![GitHub](https://img.shields.io/badge/GitHub-Repository-181717?style=flat&logo=github)](https://github.com/oracle7/sms-gateway)
+[![Codeberg](https://img.shields.io/badge/Codeberg-Repository-2185d0?style=flat&logo=codeberg)](https://codeberg.org/oracle7/sms-gateway)
+
 A lightweight, high-performance web interface and background synchronization service built with **FastAPI** and **SQLite**. It interfaces seamlessly with an Android SMS Transceiver device to send, receive, and render SMS/MMS messages with full multimedia support.
 
 ---
@@ -88,13 +91,23 @@ The system is decoupled into two primary components to ensure high availability 
 
 ### Installation
 
+### Installation
+
 1. **Clone the repository:**
-```bash
-git clone https://github.com/your-username/sms-gateway-hub.git
-cd sms-gateway-hub
 
-```
+   Choose your preferred platform:
 
+   * **GitHub:**
+     ```bash
+     git clone [https://github.com/oracle7/sms-gateway.git](https://github.com/oracle7/sms-gateway.git)
+     cd sms-gateway
+     ```
+
+   * **Codeberg:**
+     ```bash
+     git clone [https://codeberg.org/oracle7/sms-gateway.git](https://codeberg.org/oracle7/sms-gateway.git)
+     cd sms-gateway
+     ```
 
 2. **Create and activate a virtual environment:**
 ```bash

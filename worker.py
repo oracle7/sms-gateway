@@ -79,12 +79,12 @@ def poll_transceiver(is_initial_sync=False):
             for msg in messages:
                 msg_id_str = str(msg.get("id")) if msg.get("id") is not None else None
                 
-                # Extração robusta do número
+                # Robust phone number extraction
                 raw_number = msg.get("sender") or msg.get("recipient") or msg.get("address") or msg.get("from") or ""
                 raw_number = str(raw_number).strip()
                 if not raw_number or raw_number == "null":
                     raw_number = "UNKNOWN"
-                    logger.warning(f"[{msg_id_str}] Número não encontrado! Payload: {msg}")
+                    logger.warning(f"[{msg_id_str}] Phone number not found! Payload: {msg}")
                 
                 body = msg.get("contentPreview", msg.get("body", ""))
                 msg_type = msg.get("type", "")
@@ -92,14 +92,14 @@ def poll_transceiver(is_initial_sync=False):
                 if not msg_id_str or msg_id_str in BLOCKED_MESSAGE_IDS or raw_number in BLOCKED_NUMBERS:
                     continue
 
-                # Identifica se é MMS
+                # Identify if message is MMS
                 is_mms = msg_type in ["MMS", "MMS_DOWNLOADED"] or "MMS" in body
                 
-                # Transforma a notificação no container da imagem (limpa o texto "MMS notification")
+                # Transforms notification into image container (clears "MMS notification" text)
                 if is_mms:
                     body = ""
 
-                # Prevenção de duplicatas
+                # Duplicate prevention
                 cursor.execute("SELECT 1 FROM messages WHERE id = ?", (msg_id_str,))
                 if cursor.fetchone():
                     reached_known_messages = True
@@ -119,7 +119,7 @@ def poll_transceiver(is_initial_sync=False):
                     # MMS EXTRACTION & MATCHING LOGIC
                     # ==========================================
                     if is_mms and msg_id_str:
-                        logger.info(f"[{msg_id_str}] Cruzando dados do MMS para {raw_number} nos logs...")
+                        logger.info(f"[{msg_id_str}] Cross-referencing MMS data for {raw_number} in logs...")
                         try:
                             logs_response = requests.get(
                                 logs_url,
@@ -131,7 +131,7 @@ def poll_transceiver(is_initial_sync=False):
                             real_mms_id = None
                             clean_number = raw_number.replace("+", "")
                             
-                            # Busca o ID real do download associado ao número do remetente
+                            # Search for the real download ID associated with the sender's number
                             lines = logs_text.split('\n')
                             for i, line in enumerate(lines):
                                 if clean_number in line or raw_number in line:
@@ -142,22 +142,22 @@ def poll_transceiver(is_initial_sync=False):
                                         break
                             
                             if not real_mms_id:
-                                logger.warning(f"[{msg_id_str}] ID real não encontrado nos logs para {raw_number}. Tentando ID original.")
+                                logger.warning(f"[{msg_id_str}] Real ID not found in logs for {raw_number}. Falling back to original ID.")
                                 real_mms_id = msg_id_str.replace("mms:", "").replace("sms:", "")
                             else:
-                                logger.info(f"[{msg_id_str}] ID real do MMS encontrado: {real_mms_id}")
+                                logger.info(f"[{msg_id_str}] Real MMS ID found: {real_mms_id}")
 
-                            # Tenta achar os partIDs, fallback para 0, 1 e 2
+                            # Attempt to find partIDs, with fallback to 0, 1, and 2
                             part_ids_found = re.findall(r'(\d+)\s*\{\s*contentType:', logs_text)
                             if not part_ids_found:
                                 part_ids_found = ['0', '1', '2']
                             else:
                                 part_ids_found = list(set(part_ids_found))
                             
-                            # Faz o download usando o ID real, mas salva vinculado ao ID original
+                            # Download using the real ID, but save linked to the original ID
                             for part_id in part_ids_found:
                                 download_url = f"{base_url}/{real_mms_id}/attachments/{part_id}"
-                                logger.info(f"[{msg_id_str}] Tentando baixar anexo de: {download_url}")
+                                logger.info(f"[{msg_id_str}] Attempting attachment download from: {download_url}")
                                 
                                 att_resp = requests.get(
                                     download_url, 
@@ -177,7 +177,7 @@ def poll_transceiver(is_initial_sync=False):
                                     with open(filepath, 'wb') as f:
                                         f.write(att_resp.content)
                                         
-                                    logger.info(f"[{msg_id_str}] Arquivo MMS salvo com sucesso: {filepath}")
+                                    logger.info(f"[{msg_id_str}] MMS file successfully saved: {filepath}")
                                         
                                     cursor.execute('''
                                         INSERT INTO message_attachments (message_id, media_url, content_type)
@@ -185,7 +185,7 @@ def poll_transceiver(is_initial_sync=False):
                                     ''', (msg_id_str, f"/static/mms/{unique_filename}", content_type))
                                     
                         except Exception as e:
-                            logger.error(f"[Sync Loop] Erro processando MMS (ID: {msg_id_str}): {str(e)}")
+                            logger.error(f"[Sync Loop] Error processing MMS (ID: {msg_id_str}): {str(e)}")
                     # ==========================================
 
                     new_inserts_this_page += 1
