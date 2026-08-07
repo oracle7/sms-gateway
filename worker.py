@@ -157,7 +157,7 @@ def poll_transceiver(is_initial_sync=False):
                             # Download using the real ID, but save linked to the original ID
                             for part_id in part_ids_found:
                                 download_url = f"{base_url}/{real_mms_id}/attachments/{part_id}"
-                                logger.info(f"[{msg_id_str}] Attempting attachment download from: {download_url}")
+                                logger.info(f"[{msg_id_str}] Requesting attachment from: {download_url}")
                                 
                                 att_resp = requests.get(
                                     download_url, 
@@ -165,8 +165,20 @@ def poll_transceiver(is_initial_sync=False):
                                     timeout=15.0
                                 )
                                 
+                                logger.info(f"[{msg_id_str}] Attachment part {part_id} response: Status {att_resp.status_code}, Size {len(att_resp.content)} bytes")
+                                
                                 if att_resp.status_code == 200 and len(att_resp.content) > 0:
                                     content_type = att_resp.headers.get("Content-Type", "application/octet-stream")
+                                    
+                                    # Check if this part is a text message inside MMS
+                                    if "text/plain" in content_type:
+                                        mms_text = att_resp.content.decode("utf-8", errors="ignore").strip()
+                                        if mms_text:
+                                            cursor.execute("UPDATE messages SET body = ? WHERE id = ?", (mms_text, msg_id_str))
+                                            logger.info(f"[{msg_id_str}] Extracted text body from MMS part {part_id}: {mms_text}")
+                                        continue
+
+                                    # Process image or media binary attachments
                                     ext = content_type.split("/")[-1] if "/" in content_type else "bin"
                                     if ext == "jpeg": 
                                         ext = "jpg"
@@ -177,7 +189,7 @@ def poll_transceiver(is_initial_sync=False):
                                     with open(filepath, 'wb') as f:
                                         f.write(att_resp.content)
                                         
-                                    logger.info(f"[{msg_id_str}] MMS file successfully saved: {filepath}")
+                                    logger.info(f"[{msg_id_str}] MMS media saved successfully: {filepath}")
                                         
                                     cursor.execute('''
                                         INSERT INTO message_attachments (message_id, media_url, content_type)
