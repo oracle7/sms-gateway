@@ -2,6 +2,9 @@ import asyncio
 import requests
 import sqlite3
 import logging
+import re
+import os
+import uuid
 from datetime import datetime, timezone
 from config import settings
 
@@ -24,6 +27,9 @@ BLOCKED_MESSAGE_IDS = set()
 logger = logging.getLogger("uvicorn.error")
 _INITIAL_SYNC_DONE = False
 
+MEDIA_DIR = "static/mms"
+os.makedirs(MEDIA_DIR, exist_ok=True)
+
 def get_db_path():
     return settings.DATABASE_URL.replace("sqlite:///", "")
 
@@ -37,6 +43,7 @@ def normalize_utc(iso_string):
 
 def poll_transceiver(is_initial_sync=False):
     base_url = f"{settings.SMS_API_URL.rstrip('/')}/inbox" if not settings.SMS_API_URL.endswith('/inbox') else settings.SMS_API_URL
+    logs_url = f"{settings.SMS_API_URL.rstrip('/')}/logs"
     db_path = get_db_path()
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
@@ -71,13 +78,28 @@ def poll_transceiver(is_initial_sync=False):
 
             for msg in messages:
                 msg_id_str = str(msg.get("id")) if msg.get("id") is not None else None
-                raw_number = msg.get("sender") or msg.get("recipient", "UNKNOWN")
+                
+                # Extração robusta do número
+                raw_number = msg.get("sender") or msg.get("recipient") or msg.get("address") or msg.get("from") or ""
+                raw_number = str(raw_number).strip()
+                if not raw_number or raw_number == "null":
+                    raw_number = "UNKNOWN"
+                    logger.warning(f"[{msg_id_str}] Número não encontrado! Payload: {msg}")
+                
                 body = msg.get("contentPreview", msg.get("body", ""))
+                msg_type = msg.get("type", "")
                 
                 if not msg_id_str or msg_id_str in BLOCKED_MESSAGE_IDS or raw_number in BLOCKED_NUMBERS:
                     continue
 
-                # Clean duplicate prevention checkpoint
+                # Identifica se é MMS
+                is_mms = msg_type in ["MMS", "MMS_DOWNLOADED"] or "MMS" in body
+                
+                # Transforma a notificação no container da imagem (limpa o texto "MMS notification")
+                if is_mms:
+                    body = ""
+
+                # Prevenção de duplicatas
                 cursor.execute("SELECT 1 FROM messages WHERE id = ?", (msg_id_str,))
                 if cursor.fetchone():
                     reached_known_messages = True
@@ -92,9 +114,82 @@ def poll_transceiver(is_initial_sync=False):
                         INSERT INTO messages (id, raw_number, body, timestamp, is_inbound)
                         VALUES (?, ?, ?, ?, ?)
                     ''', (msg_id_str, raw_number, body, utc_timestamp, is_inbound))
+                    
+                    # ==========================================
+                    # MMS EXTRACTION & MATCHING LOGIC
+                    # ==========================================
+                    if is_mms and msg_id_str:
+                        logger.info(f"[{msg_id_str}] Cruzando dados do MMS para {raw_number} nos logs...")
+                        try:
+                            logs_response = requests.get(
+                                logs_url,
+                                auth=(settings.SMS_API_LOGIN, settings.SMS_API_PASS),
+                                timeout=15.0
+                            )
+                            logs_text = logs_response.text
+                            
+                            real_mms_id = None
+                            clean_number = raw_number.replace("+", "")
+                            
+                            # Busca o ID real do download associado ao número do remetente
+                            lines = logs_text.split('\n')
+                            for i, line in enumerate(lines):
+                                if clean_number in line or raw_number in line:
+                                    window = " ".join(lines[max(0, i-10):min(len(lines), i+10)])
+                                    match = re.search(r'(?:id["\':\s]*|mms:)(\d{3,8})', window, re.IGNORECASE)
+                                    if match:
+                                        real_mms_id = match.group(1)
+                                        break
+                            
+                            if not real_mms_id:
+                                logger.warning(f"[{msg_id_str}] ID real não encontrado nos logs para {raw_number}. Tentando ID original.")
+                                real_mms_id = msg_id_str.replace("mms:", "").replace("sms:", "")
+                            else:
+                                logger.info(f"[{msg_id_str}] ID real do MMS encontrado: {real_mms_id}")
+
+                            # Tenta achar os partIDs, fallback para 0, 1 e 2
+                            part_ids_found = re.findall(r'(\d+)\s*\{\s*contentType:', logs_text)
+                            if not part_ids_found:
+                                part_ids_found = ['0', '1', '2']
+                            else:
+                                part_ids_found = list(set(part_ids_found))
+                            
+                            # Faz o download usando o ID real, mas salva vinculado ao ID original
+                            for part_id in part_ids_found:
+                                download_url = f"{base_url}/{real_mms_id}/attachments/{part_id}"
+                                logger.info(f"[{msg_id_str}] Tentando baixar anexo de: {download_url}")
+                                
+                                att_resp = requests.get(
+                                    download_url, 
+                                    auth=(settings.SMS_API_LOGIN, settings.SMS_API_PASS),
+                                    timeout=15.0
+                                )
+                                
+                                if att_resp.status_code == 200 and len(att_resp.content) > 0:
+                                    content_type = att_resp.headers.get("Content-Type", "application/octet-stream")
+                                    ext = content_type.split("/")[-1] if "/" in content_type else "bin"
+                                    if ext == "jpeg": 
+                                        ext = "jpg"
+                                    
+                                    unique_filename = f"{uuid.uuid4().hex}_part{part_id}.{ext}"
+                                    filepath = os.path.join(MEDIA_DIR, unique_filename)
+                                    
+                                    with open(filepath, 'wb') as f:
+                                        f.write(att_resp.content)
+                                        
+                                    logger.info(f"[{msg_id_str}] Arquivo MMS salvo com sucesso: {filepath}")
+                                        
+                                    cursor.execute('''
+                                        INSERT INTO message_attachments (message_id, media_url, content_type)
+                                        VALUES (?, ?, ?)
+                                    ''', (msg_id_str, f"/static/mms/{unique_filename}", content_type))
+                                    
+                        except Exception as e:
+                            logger.error(f"[Sync Loop] Erro processando MMS (ID: {msg_id_str}): {str(e)}")
+                    # ==========================================
+
                     new_inserts_this_page += 1
                 except sqlite3.IntegrityError:
-                    # Fallback boundary just in case
                     reached_known_messages = True
 
             total_inserts_this_cycle += new_inserts_this_page
@@ -116,10 +211,10 @@ def poll_transceiver(is_initial_sync=False):
                     limit = 500 
 
         except requests.RequestException as e:
-            logger.error(f"[Sync Loop] Network error tracking API endpoint: {e}")
+            logger.error(f"[Sync Loop] Network error: {e}")
             break
         except Exception as e:
-            logger.error(f"[Sync Loop] Processing error during array evaluation: {e}")
+            logger.error(f"[Sync Loop] Processing error: {e}")
             break
 
     if total_inserts_this_cycle > 0:
@@ -134,13 +229,26 @@ async def sync_inbox_loop():
     
     db_path = get_db_path()
     conn = sqlite3.connect(db_path)
+    
     conn.execute('''
         CREATE TABLE IF NOT EXISTS messages (
             id TEXT PRIMARY KEY,
+            gateway_id TEXT,
             raw_number TEXT NOT NULL,
             body TEXT NOT NULL,
             timestamp TEXT NOT NULL,
-            is_inbound BOOLEAN NOT NULL
+            is_inbound BOOLEAN NOT NULL,
+            status TEXT DEFAULT 'delivered'
+        )
+    ''')
+    
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS message_attachments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id TEXT NOT NULL,
+            media_url TEXT NOT NULL,
+            content_type TEXT,
+            FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
         )
     ''')
     conn.commit()

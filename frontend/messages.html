@@ -18,16 +18,14 @@
             background: transparent;
         }
 
-        /* New Animations and Styles */
         @keyframes flash-banner {
             0%, 100% {
                 background-color: #dc2626;
             }
-            /* red-600 */
+
             50% {
                 background-color: #991b1b;
             }
-            /* red-800 */
         }
 
         .flashing {
@@ -42,7 +40,6 @@
 </head>
 <body class="bg-gray-100 h-screen flex flex-col overflow-hidden relative">
 
-    <!-- Audio Element for Notifications -->
     <audio id="notif-sound" src="/static/airport-ding.mp3" preload="auto"></audio>
 
     <div id="persistentToast" class="fixed top-0 left-0 right-0 bg-red-600 text-white text-center py-4 text-xl font-bold shadow-2xl transform -translate-y-full transition-transform duration-500 z-[100] flex items-center justify-center gap-3">
@@ -101,7 +98,7 @@
         </div>
     </div>
 
-    <!-- New Thread and Contact Modals -->
+    <!-- Modals -->
     <div id="newThreadModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
         <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
             <h2 class="text-xl font-bold mb-4 text-gray-800">Start New Message</h2>
@@ -129,15 +126,13 @@
     </div>
 
     <script>
-        // Global App States
         const API_URL = window.location.origin;
         let allMessages = [];
         let contactsMap = {};
         let currentActiveNumber = null;
         let pollInterval = null;
-        let unreadThreads = new Set(); // Local state to track unread threads
+        let unreadThreads = new Set();
 
-        // UI Event Trackers for Background Alerts
         let originalTitle = document.title;
         let titleFlashInterval = null;
         let isWindowFocused = true;
@@ -153,7 +148,7 @@
             if (toast && !toast.classList.contains('-translate-y-full')) {
                 toastTimeout = setTimeout(() => {
                     toast.classList.add('-translate-y-full');
-                    toast.classList.remove('flashing'); // Remove flash when closing
+                    toast.classList.remove('flashing');
                 }, 3000);
             }
         };
@@ -169,10 +164,9 @@
             const toast = document.getElementById('persistentToast');
             if (toast) {
                 toast.classList.remove('-translate-y-full');
-                toast.classList.add('flashing'); // Activate animation
+                toast.classList.add('flashing');
             }
 
-            // Play notification sound
             if (notifSound) {
                 notifSound.play().catch(e => console.log("Audio play blocked by browser. User interaction needed first."));
             }
@@ -181,7 +175,7 @@
                 clearInterval(titleFlashInterval);
                 let showNew = true;
                 titleFlashInterval = setInterval(() => {
-                    document.title = showNew ? "?? New Message!" : originalTitle;
+                    document.title = showNew ? "🔔 New Message!" : originalTitle;
                     showNew = !showNew;
                 }, 1000);
             } else {
@@ -209,20 +203,40 @@
                 return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="underline hover:opacity-80 transition cursor-pointer">${url}</a>`;
             });
 
-            if (msg.media_url) {
-                const isImage = msg.media_url.match(/\.(jpeg|jpg|gif|png|webp)(\?.*)?$/i);
+            // Handle MMS Attachments natively based on mime type
+            if (msg.attachments && msg.attachments.length > 0) {
+                msg.attachments.forEach(att => {
+                    const url = att.media_url;
+                    const mime = att.content_type || "";
 
-                if (isImage) {
-                    content = `<div class="mb-2 text-sm italic opacity-75">${content}</div>
-                       <a href="${msg.media_url}" target="_blank" rel="noopener noreferrer" class="block mt-1">
-                           <img src="${msg.media_url}" class="max-w-full rounded-lg max-h-56 object-cover shadow-sm hover:opacity-90 transition border border-black/10" alt="MMS Anexo">
-                       </a>`;
-                } else {
-                    content += `<a href="${msg.media_url}" target="_blank" rel="noopener noreferrer" class="block mt-2 underline font-semibold flex items-center gap-1">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path></svg>
-                            Visualizar Anexo
-                        </a>`;
-                }
+                    if (mime.startsWith("image/") || url.match(/\.(jpeg|jpg|gif|png|webp)(\?.*)?$/i)) {
+                        // Image wrapper for downscale toggle expansion and right-click download
+                        content += `
+                            <div class="mt-2">
+                                <img src="${url}"
+                                     class="max-w-full rounded-lg max-h-48 object-scale-down shadow-sm cursor-pointer border border-black/10 transition-all duration-300"
+                                     onclick="this.classList.toggle('max-h-48'); this.classList.toggle('max-h-screen');"
+                                     alt="MMS Image"
+                                     title="Click to expand/collapse. Right click to save.">
+                            </div>`;
+                    } else if (mime.startsWith("audio/") || url.match(/\.(mp3|wav|ogg|m4a|aac)(\?.*)?$/i)) {
+                        // Native HTML5 audio player injected directly into the chat bubble
+                        content += `
+                            <div class="mt-2">
+                                <audio controls class="w-full max-w-[250px] h-10 outline-none rounded-full">
+                                    <source src="${url}" type="${mime || 'audio/mpeg'}">
+                                    Your browser does not support the audio element.
+                                </audio>
+                            </div>`;
+                    } else {
+                        // Fallback block for unsupported or raw binary files
+                        content += `
+                            <a href="${url}" target="_blank" rel="noopener noreferrer" class="block mt-2 underline font-semibold flex items-center gap-1 text-sm bg-black/5 p-2 rounded w-fit">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path></svg>
+                                Download Attachment
+                            </a>`;
+                    }
+                });
             }
 
             return content;
@@ -326,7 +340,6 @@
                     const newMessages = data.filter(m => !existingIds.has(m.id));
                     const hasNewInbound = newMessages.some(m => m.is_inbound);
 
-                    // Add new inbound threads to Unread, if not currently active
                     newMessages.forEach(m => {
                         const num = normalizeNumber(m.raw_number);
                         if (m.is_inbound && num !== currentActiveNumber) {
@@ -433,9 +446,13 @@
                     ? `<div class="text-xs text-gray-400 mb-1">${num}</div>`
                     : `<div class="font-semibold text-gray-800 mb-1">${num}</div>`;
 
-                const preview = msg.body.length > 40 ? msg.body.substring(0, 40) + "..." : msg.body;
+                let bodyPreview = msg.body;
+                if (!bodyPreview && msg.attachments && msg.attachments.length > 0) {
+                    bodyPreview = "[Attachment]";
+                }
 
-                // Visual logic for Unread vs Active
+                const preview = (bodyPreview && bodyPreview.length > 40) ? bodyPreview.substring(0, 40) + "..." : bodyPreview;
+
                 const isActive = (num === currentActiveNumber);
                 const isUnread = unreadThreads.has(num);
 
@@ -446,26 +463,26 @@
                     activeClass = 'bg-blue-50 border-l-4 border-blue-600';
                 } else if (isUnread) {
                     activeClass = 'unread-thread';
-                    textClass = 'text-red-700 font-semibold'; // More visible preview
+                    textClass = 'text-red-700 font-semibold';
                 }
 
                 return `
-                        <div onclick="selectThread('${num}')" class="p-4 border-b cursor-pointer transition ${activeClass}">
-                            ${nameDisplay}
-                            ${numberDisplay}
-                            <div class="text-sm ${textClass}">${preview}</div>
-                        </div>
-                    `;
+                            <div onclick="selectThread('${num}')" class="p-4 border-b cursor-pointer transition ${activeClass}">
+                                ${nameDisplay}
+                                ${numberDisplay}
+                                <div class="text-sm ${textClass}">${preview}</div>
+                            </div>
+                        `;
             }).join('');
 
             if (searchTerm && !serverSearched) {
                 html += `
-                        <div class="p-4 bg-gray-50 border-b">
-                            <button id="deepSearchBtn" onclick="executeDeepSearch()" class="w-full bg-blue-100 text-blue-700 hover:bg-blue-200 border border-blue-300 p-2 rounded transition font-medium text-sm shadow-sm">
-                                Search server history for "${searchTerm}"...
-                            </button>
-                        </div>
-                    `;
+                            <div class="p-4 bg-gray-50 border-b">
+                                <button id="deepSearchBtn" onclick="executeDeepSearch()" class="w-full bg-blue-100 text-blue-700 hover:bg-blue-200 border border-blue-300 p-2 rounded transition font-medium text-sm shadow-sm">
+                                    Search server history for "${searchTerm}"...
+                                </button>
+                            </div>
+                        `;
             }
 
             if (filteredNumbers.length === 0 && !searchTerm) {
@@ -477,7 +494,7 @@
 
         function selectThread(number) {
             currentActiveNumber = number;
-            unreadThreads.delete(number); // Remove from unread list on click
+            unreadThreads.delete(number);
             dismissError();
 
             const currentSearch = document.getElementById('searchInput').value.toLowerCase();
@@ -530,24 +547,24 @@
                 });
 
                 const copyBtn = `
-                        <button onclick="copyMessage(this)" data-text="${escapeAttr(msg.body)}"
-                                class="opacity-0 group-hover:opacity-100 transition-opacity p-2 text-gray-400 hover:text-gray-600 flex items-center justify-center self-end mb-1 ${isPatient ? 'ml-1' : 'mr-1'}" title="Copy message">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
-                            </svg>
-                        </button>
-                    `;
+                            <button onclick="copyMessage(this)" data-text="${escapeAttr(msg.body)}"
+                                    class="opacity-0 group-hover:opacity-100 transition-opacity p-2 text-gray-400 hover:text-gray-600 flex items-center justify-center self-end mb-1 ${isPatient ? 'ml-1' : 'mr-1'}" title="Copy message">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                                </svg>
+                            </button>
+                        `;
 
                 return `
-                        <div class="flex w-full ${alignClass} group">
-                            ${!isPatient ? copyBtn : ''}
-                            <div class="max-w-[70%] p-3 rounded-xl ${bubbleClass}">
-                                <div class="text-[15px] leading-relaxed whitespace-pre-wrap break-words">${formatMessageContent(msg)}</div>
-                                <div class="text-[11px] mt-1 text-right ${isPatient ? 'text-gray-400' : 'text-blue-200'}">${timeString}</div>
+                            <div class="flex w-full ${alignClass} group">
+                                ${!isPatient ? copyBtn : ''}
+                                <div class="max-w-[70%] p-3 rounded-xl ${bubbleClass}">
+                                    <div class="text-[15px] leading-relaxed whitespace-pre-wrap break-words">${formatMessageContent(msg)}</div>
+                                    <div class="text-[11px] mt-1 text-right ${isPatient ? 'text-gray-400' : 'text-blue-200'}">${timeString}</div>
+                                </div>
+                                ${isPatient ? copyBtn : ''}
                             </div>
-                            ${isPatient ? copyBtn : ''}
-                        </div>
-                    `;
+                        `;
             }).join('');
 
             chatContainer.scrollTop = chatContainer.scrollHeight;

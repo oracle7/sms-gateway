@@ -3,6 +3,7 @@ import logging
 import re
 import os
 import aiofiles
+import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -21,8 +22,10 @@ router = APIRouter(prefix="/messages", tags=["Messages"])
 PHONE_API_BASE = settings.SMS_API_URL.rstrip('/')
 PHONE_API_MESSAGES = f"{PHONE_API_BASE}/messages"  # Used for POST
 PHONE_API_INBOX = f"{PHONE_API_BASE}/inbox"        # Used for GET
+PHONE_API_LOGS = f"{PHONE_API_BASE}/logs"          # Used to parse MMS metadata
 
-MEDIA_DIR = "static/media"
+# Updated directory to store MMS as requested
+MEDIA_DIR = "static/mms"
 os.makedirs(MEDIA_DIR, exist_ok=True)
 
 def get_auth_headers():
@@ -114,13 +117,23 @@ async def handle_inbound_sms(request: Request, db: Session = Depends(get_db)):
     payload = await request.json()
     
     msg_id = payload.get("id")
-    sender = payload.get("phoneNumber")
-    body = payload.get("message", "")
-    attachments = payload.get("attachments", [])
+    sender = payload.get("phoneNumber") or payload.get("sender", "")
+    body = payload.get("message") or payload.get("contentPreview") or ""
+    msg_type = payload.get("type", "")
+
+    # Identify if the payload refers to an MMS
+    is_mms = msg_type in ["MMS", "MMS_DOWNLOADED"] or "MMS" in body
+
+    # We do not process or store 'MMS notification' to avoid database clutter
+    if is_mms and (body == "MMS notification" or msg_type == "MMS"):
+        return {"status": "ignored_mms_notification"}
+
+    # If it is an MMS, we remove the "MMS content" text to leave the body blank
+    final_body = "" if is_mms else body
 
     db_msg = models.Message(
         raw_number=sender,
-        body=body,
+        body=final_body,
         is_inbound=True,
         status="received",
         gateway_id=msg_id,
@@ -129,39 +142,62 @@ async def handle_inbound_sms(request: Request, db: Session = Depends(get_db)):
     db.add(db_msg)
     db.flush()
 
-    if attachments and msg_id:
+    # If it is a downloaded MMS, fetch logs to find the attachment part IDs
+    if is_mms and msg_id:
         async with httpx.AsyncClient() as client:
-            for att in attachments:
-                part_id = att.get("partId")
-                if not part_id:
-                    continue
+            try:
+                logs_response = await client.get(
+                    PHONE_API_LOGS,
+                    auth=get_auth_headers(),
+                    timeout=15.0
+                )
                 
-                download_url = f"{PHONE_API_INBOX}/{msg_id}/attachments/{part_id}"
+                logs_text = logs_response.text
                 
-                try:
-                    response = await client.get(
+                # Use regex to find part IDs inside the log strings
+                # Looks for patterns matching index structures like '0{ contentType:'
+                part_ids_found = re.findall(r'(\d+)\s*\{\s*contentType:', logs_text)
+                
+                # Fallback to standard parts if regex fails against log format variations
+                if not part_ids_found:
+                    part_ids_found = ['0', '1', '2']
+                    
+                # Deduplicate the IDs found
+                part_ids_found = list(set(part_ids_found))
+                
+                for part_id in part_ids_found:
+                    download_url = f"{PHONE_API_INBOX}/{msg_id}/attachments/{part_id}"
+                    
+                    att_resp = await client.get(
                         download_url, 
                         auth=get_auth_headers(),
                         timeout=15.0
                     )
                     
-                    if response.status_code == 200:
-                        content_type = response.headers.get("Content-Type", "application/octet-stream")
+                    # Ensure we only save if bytes are returned (ignores 0-byte errors)
+                    if att_resp.status_code == 200 and len(att_resp.content) > 0:
+                        content_type = att_resp.headers.get("Content-Type", "application/octet-stream")
                         ext = content_type.split("/")[-1] if "/" in content_type else "bin"
-                        filename = f"{msg_id}_part{part_id}.{ext}"
-                        filepath = os.path.join(MEDIA_DIR, filename)
+                        if ext == "jpeg": 
+                            ext = "jpg"
+                        
+                        # Generate a unique hex name for the file
+                        unique_filename = f"{uuid.uuid4().hex}_part{part_id}.{ext}"
+                        filepath = os.path.join(MEDIA_DIR, unique_filename)
                         
                         async with aiofiles.open(filepath, 'wb') as f:
-                            await f.write(response.content)
+                            await f.write(att_resp.content)
                             
+                        # Store reference in the database
                         db_attachment = models.MessageAttachment(
                             message_id=db_msg.id,
-                            media_url=f"/static/media/{filename}",
+                            media_url=f"/static/mms/{unique_filename}",
                             content_type=content_type
                         )
                         db.add(db_attachment)
-                except httpx.RequestError as e:
-                    logger.error(f"Falha ao baixar anexo {part_id} da msg {msg_id}: {str(e)}")
+                        
+            except Exception as e:
+                logger.error(f"Failed to extract MMS from logs for {msg_id}: {str(e)}")
 
     db.commit()
     return {"status": "processed"}
