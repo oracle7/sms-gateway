@@ -98,6 +98,7 @@ def poll_transceiver(is_initial_sync=False):
                 # Transforms notification into image container (clears "MMS notification" text)
                 if is_mms:
                     body = ""
+                    logger.info(f"\n\n=== RAW MMS PAYLOAD START ===\n{msg}\n=== RAW MMS PAYLOAD END ===\n\n")
 
                 # Duplicate prevention
                 cursor.execute("SELECT 1 FROM messages WHERE id = ?", (msg_id_str,))
