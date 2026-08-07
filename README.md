@@ -50,17 +50,30 @@ The system is decoupled into two primary components to ensure high availability 
 
 ```text
 .
-├── config.py             # Environment configurations & settings
-├── database.py           # SQLite connection setup
-├── main.py               # FastAPI application entrypoint
-├── messages.py           # API routes & web endpoints
-├── models.py             # SQLAlchemy DB Models (Messages & Attachments)
-├── schema.py             # Pydantic validation schemas
-├── worker.py             # Background transceiver polling & MMS extraction logic
-├── static/
-│   └── mms/              # Media directory for stored MMS attachments
-└── templates/
-    └── messages.html     # Web chat user interface
+├── frontend/                 # UI HTML Templates
+│   ├── contacts.html         # Contacts management view
+│   ├── header.html           # Reusable navigation header component
+│   └── messages.html         # Main messaging interface and chat threads
+├── routers/                  # FastAPI Modular Route Handlers
+│   ├── __init__.py           # Package initializer
+│   ├── contacts.py           # Contacts API endpoints
+│   └── messages.py           # Messages API endpoints and views
+├── static/                   # Public Static Assets
+│   ├── media/                # Directory for downloaded MMS attachments
+│   └── airport_ding.mp3      # Audio alert for new message notifications
+├── .gitignore                # Git untracked files configuration
+├── bootstrap_db.py           # Database initial setup/seeding script
+├── config.py                 # Environment variables and app configuration
+├── database.py               # SQLite database connection setup
+├── generate_prototype.py     # Mock data generator for testing
+├── LICENSE                   # Mozilla Public License 2.0 (MPL 2.0)
+├── main.py                   # FastAPI application entrypoint
+├── models.py                 # SQLAlchemy database models
+├── README.md                 # Project documentation
+├── requirements.txt          # Python dependencies list
+├── schemas.py                # Pydantic data validation schemas
+├── start_app.sh              # Application startup script
+└── worker.py                 # Background polling worker for SMS/MMS sync
 
 ```
 
@@ -99,13 +112,10 @@ pip install -r requirements.txt
 
 
 4. **Configure environment variables:**
-Create a `.env` file (or set variables in `config.py`):
-```env
-DATABASE_URL=sqlite:///database.db
-SMS_API_URL=http://<YOUR_TRANSCEIVER_IP>:8080
-SMS_API_LOGIN=your_login
-SMS_API_PASS=your_password
-
+   Copy the example environment file and update it with your transceiver credentials:
+```bash
+   cp .env.example .env
+   nano .env  # Edit the file to set TRANSCEIVER_URL, API_KEY, etc.
 ```
 
 
@@ -117,7 +127,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 
 6. **Access the Web Dashboard:**
-Open your browser and navigate to `http://localhost:8000/messages`
+Open your browser and navigate to `http://<server_URL>:8000/messages`
 
 ---
 

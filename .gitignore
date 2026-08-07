@@ -1,3 +1,20 @@
+# ==========================================
+# SMS Gateway Custom Rules
+# ==========================================
+
+# Ignora arquivos de banco SQLite locais além do padrão db.sqlite3
+*.db
+*.sqlite
+
+# Ignora os mídias/anexos de MMS baixados para não poluir o repositório,
+# mas mantém a pasta e o arquivo de áudio de notificação
+static/media/*
+!static/media/airport_ding.mp3
+
+# ==========================================
+# General Comprehensive Rules
+# ========================================== 
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
