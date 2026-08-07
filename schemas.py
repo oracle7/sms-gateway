@@ -36,3 +36,6 @@ class MessageResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class RawWebhookCreate(BaseModel):
+    payload: str

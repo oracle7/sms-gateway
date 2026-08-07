@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from database import Base
@@ -30,3 +30,10 @@ class MessageAttachment(Base):
     message_id = Column(String, ForeignKey("messages.id", ondelete="CASCADE"), nullable=False)
     media_url = Column(String, nullable=False)
     content_type = Column(String, nullable=True)
+
+class RawWebhookDump(Base):
+    __tablename__ = "raw_webhooks"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    received_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    payload = Column(Text, nullable=False)

@@ -8,9 +8,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 
 from database import engine, Base
+# Added the webhook router import here:
 from routers import contacts_router, messages_router
-# Import from clean, separate worker module
-from worker import sync_inbox_loop
+from routers.webhook import router as webhook_router
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -21,17 +21,12 @@ async def lifespan(app: FastAPI):
     
     os.makedirs("static/media", exist_ok=True)
     
-    logger.info("Spawning background transceiver workers...")
-    polling_task = asyncio.create_task(sync_inbox_loop())
+    # The background polling worker has been intentionally removed here
+    # to favor the new push-based webhook architecture.
+    logger.info("SMS Gateway service started (Webhook mode active).")
     
     yield
     
-    logger.info("Canceling background polling tasks...")
-    polling_task.cancel()
-    try:
-        await polling_task
-    except asyncio.CancelledError:
-        pass
     logger.info("SMS Gateway service stopped cleanly.")
 
 app = FastAPI(
@@ -50,6 +45,8 @@ app.add_middleware(
 
 app.include_router(contacts_router)
 app.include_router(messages_router)
+# Mount the new webhook router:
+app.include_router(webhook_router)
 
 app.mount("/ui", StaticFiles(directory="frontend", html=True), name="frontend")
 app.mount("/static", StaticFiles(directory="static"), name="static")
