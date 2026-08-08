@@ -1,29 +1,23 @@
-﻿<header class="bg-white border-b border-slate-200 px-6 py-3.5 flex items-center justify-between shrink-0 shadow-sm">
+﻿<header class="bg-white border-b border-gray-200 w-full px-6 py-3 flex items-center justify-between z-20 shrink-0">
     <!-- Left: App Branding & Navigation -->
-    <div class="flex items-center space-x-8">
-        <a href="/" class="flex items-center">
+    <div class="flex items-center space-x-6">
+        <a href="/" class="flex-none">
             <span class="text-xl font-bold text-blue-600 tracking-tight">Practice SMS</span>
         </a>
-        <nav class="hidden md:flex items-center space-x-6">
+        <nav class="hidden md:flex items-center space-x-4">
             <a href="/" class="text-sm font-medium text-slate-800 hover:text-blue-600 transition-colors">Messages</a>
             <a href="/contacts" class="text-sm font-medium text-slate-500 hover:text-blue-600 transition-colors">Contacts</a>
         </nav>
     </div>
 
     <!-- Right: Sleek Pixel 6 Device Status Badge -->
-    <div class="flex items-center space-x-2.5 bg-slate-50 px-3 py-1.5 rounded-md border border-slate-200 text-xs text-slate-600 font-medium">
-        <!-- Dynamic Health LED -->
+    <div class="flex-none flex items-center space-x-3 bg-slate-50 px-3 py-1.5 rounded-md border border-slate-200 text-xs text-slate-600 font-medium">
         <div id="device-health-led" class="w-2.5 h-2.5 rounded-full bg-slate-300 transition-colors duration-300" title="Waiting for ping..."></div>
-
-        <!-- Device Name -->
-        <span class="font-semibold text-slate-700">Pixel 6</span>
-
+        <span class="font-semibold text-slate-700 whitespace-nowrap">Pixel 6</span>
         <span class="text-slate-300">|</span>
-
-        <!-- Battery & Charging Indicator -->
         <div class="flex items-center space-x-1">
             <span id="battery-charging" class="hidden text-amber-500 font-bold" title="Charging">⚡</span>
-            <span id="battery-level" class="font-mono text-slate-600 font-semibold">--%</span>
+            <span id="battery-level" class="font-mono text-slate-600 font-semibold whitespace-nowrap">--%</span>
         </div>
     </div>
 </header>

@@ -4,10 +4,11 @@
 <!-- Includes the top navigation -->
     {% include 'components/header.html' %}
 
-<!-- Wraps the sidebar and chat area in a flex container filling the remaining screen -->
-<div class="flex-1 flex overflow-hidden">
+<!-- Wraps the sidebars and chat area in a 3-column flex container -->
+<div class="flex-1 flex overflow-hidden w-full">
     {% include 'components/sidebar.html' %}
     {% include 'components/chat_area.html' %}
+    {% include 'components/right_sidebar.html' %}
 </div>
 {% endblock %}
 
