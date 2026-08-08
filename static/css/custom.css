@@ -1,0 +1,40 @@
+/* Custom smooth transition animations for incoming message bubbles */
+@keyframes fadeInBubble {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.chat-bubble-animate {
+    animation: fadeInBubble 0.15s ease-out forwards;
+}
+
+/* Status indicator pulse highlight for live updates */
+.status-indicator-updated {
+    transition: color 0.3s ease, transform 0.2s ease;
+}
+
+/* Custom fine-tuned scrollbar styling */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(156, 163, 175, 0.4);
+    border-radius: 9999px;
+}
+
+    ::-webkit-scrollbar-thumb:hover {
+        background: rgba(107, 114, 128, 0.7);
+    }

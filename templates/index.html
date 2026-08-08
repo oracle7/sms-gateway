@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block content %}
+<!-- Includes the top navigation -->
+    {% include 'components/header.html' %}
+
+<!-- Wraps the sidebar and chat area in a flex container filling the remaining screen -->
+<div class="flex-1 flex overflow-hidden">
+    {% include 'components/sidebar.html' %}
+    {% include 'components/chat_area.html' %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<!-- Loads the messaging logic -->
+<script src="/static/js/app.js"></script>
+{% endblock %}

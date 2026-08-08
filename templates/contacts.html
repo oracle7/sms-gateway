@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block content %}
+    {% include 'components/header.html' %}
+
+<div class="flex-1 overflow-y-auto p-8 max-w-5xl mx-auto w-full">
+    <div class="flex justify-between items-center mb-6">
+        <h2 class="text-2xl font-bold text-gray-800">Address Book</h2>
+        <button onclick="openAddModal()" class="bg-blue-500 text-white px-4 py-2 rounded shadow hover:bg-blue-600 transition">
+            + Add Contact
+        </button>
+    </div>
+
+    <!-- Contacts Table -->
+    <div class="bg-white rounded-lg shadow overflow-hidden border border-gray-200">
+        <table class="w-full text-left border-collapse">
+            <thead>
+                <tr class="bg-gray-100 text-gray-600 text-sm uppercase tracking-wider">
+                    <th class="p-3 font-semibold border-b">Name</th>
+                    <th class="p-3 font-semibold border-b">Phone Number</th>
+                    <th class="p-3 font-semibold border-b">Notes</th>
+                    <th class="p-3 font-semibold border-b text-right">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="contacts-table-body" class="text-sm">
+                <!-- Rows populated by contacts.js -->
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Add/Edit Contact Modal (Hidden by default) -->
+<div id="contact-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden">
+        <div class="px-6 py-4 border-b bg-gray-50 flex justify-between items-center">
+            <h3 id="modal-title" class="text-lg font-bold text-gray-800">Add Contact</h3>
+            <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+        </div>
+
+        <form id="contact-form" class="p-6 space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
+                <input type="text" id="contact-phone" required class="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="+1234567890">
+                <p class="text-xs text-gray-500 mt-1">Include country code (e.g., +1)</p>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                <input type="text" id="contact-name" required class="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Jane Doe">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+                <textarea id="contact-notes" rows="3" class="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Optional details..."></textarea>
+            </div>
+            <div class="flex justify-end space-x-3 pt-2">
+                <button type="button" onclick="closeModal()" class="px-4 py-2 border rounded text-gray-600 hover:bg-gray-50">Cancel</button>
+                <button type="submit" class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">Save Contact</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/contacts.js"></script>
+{% endblock %}

@@ -1,52 +1,32 @@
-import asyncio
-import logging
 import os
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+import logging
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse
+from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
 
+# Import database initialization
 from database import engine, Base
-from routers import contacts_router, messages_router
-from routers.webhook import router as webhook_router
+import models
 
-# DISABLED WORKER:
-# import worker 
+# Import our modular routers (we will create these files next!)
+from routers import send, fetch, contacts, webhooks, events
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("uvicorn.error")
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    logger.info("Initializing database schemas...")
-    Base.metadata.create_all(bind=engine)
-    
-    os.makedirs("static/media", exist_ok=True)
-    
-    # --- DISABLED WORKER ROUTINE ---
-    # logger.info("Starting background polling worker...")
-    # polling_task = asyncio.create_task(worker.sync_inbox_loop())
-    
-    logger.info("SMS Gateway service started (Webhook mode active).")
-    
-    yield
-    
-    # --- CLEANUP ON SHUTDOWN ---
-    # logger.info("Cancelling background polling worker...")
-    # polling_task.cancel()
-    # try:
-    #     await polling_task
-    # except asyncio.CancelledError:
-    #     pass
-        
-    logger.info("SMS Gateway service stopped cleanly.")
+# Ensure required directories exist
+os.makedirs("static/media", exist_ok=True)
+os.makedirs("static/css", exist_ok=True)
+os.makedirs("static/js", exist_ok=True)
 
-app = FastAPI(
-    title="SMS Gateway API",
-    version="1.0.0",
-    lifespan=lifespan
-)
+# Create database tables automatically
+Base.metadata.create_all(bind=engine)
 
+app = FastAPI(title="SMS Gateway Backend", version="2.0")
+
+# Enable CORS for the web UI if needed
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -55,13 +35,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(contacts_router)
-app.include_router(messages_router)
-app.include_router(webhook_router)
-
-app.mount("/ui", StaticFiles(directory="frontend", html=True), name="frontend")
+# Mount static files (CSS, JS, and user media attachments)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-@app.get("/", include_in_schema=False)
-def root_redirect():
-    return RedirectResponse(url="/ui/messages.html")
+# Mount Jinja2 templates for the modular HTML
+templates = Jinja2Templates(directory="templates")
+
+# Register our modular API routers
+app.include_router(send.router, prefix="/api/messages", tags=["Send"])
+app.include_router(fetch.router, prefix="/api/messages", tags=["Fetch"])
+app.include_router(contacts.router, prefix="/api/contacts", tags=["Contacts"])
+app.include_router(webhooks.router, prefix="/webhook", tags=["Webhooks"])
+app.include_router(events.router, prefix="/events", tags=["Real-Time SSE"])
+
+# --- PAGE ROUTES ---
+@app.get("/")
+async def index_page(request: Request):
+    """Serves the main messaging/chat interface."""
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.get("/contacts")
+async def contacts_page(request: Request):
+    """Serves the contact management interface."""
+    return templates.TemplateResponse("contacts.html", {"request": request})
