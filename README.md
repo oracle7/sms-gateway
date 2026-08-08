@@ -3,157 +3,211 @@
 [![GitHub](https://img.shields.io/badge/GitHub-Repository-181717?style=flat&logo=github)](https://github.com/oracle7/sms-gateway)
 [![Codeberg](https://img.shields.io/badge/Codeberg-Repository-2185d0?style=flat&logo=codeberg)](https://codeberg.org/oracle7/sms-gateway)
 
-A lightweight, high-performance web interface and background synchronization service built with **FastAPI** and **SQLite**. It interfaces seamlessly with an Android SMS Transceiver device to send, receive, and render SMS/MMS messages with full multimedia support.
+A lightweight, self-hosted, real-time web interface and REST API gateway built with **FastAPI**, **SQLite**, and **Server-Sent Events (SSE)**. It bridges web-based messaging directly to an Android SMS/MMS gateway, featuring live delivery status tracking, contact management, and multimedia attachment handling.
 
 ---
 
-## ✨ Features
+## 🏛️ Master Architecture & Blueprint
 
-* **🔄 Asynchronous Real-Time Polling:** Background worker (`worker.py`) constantly syncs messages with the Android transceiver without freezing the web interface.
-* **🖼️ Smart MMS Extraction:** Automatically parses transceiver system logs to correlate MMS push notifications with their underlying media files (JPG, PNG, Audio, etc.).
-* **💬 Threaded Chat UI:** Clean, responsive web frontend for viewing message threads, sending replies, and inspecting attachments.
-* **🛡️ Filtering & Blacklisting:** Built-in safeguards to filter out redundant operator MMS notifications and block specific unwanted phone numbers.
-* **🗃️ Lightweight SQLite Backend:** Efficient local storage setup using raw SQL performance alongside standard ORM capabilities.
+### 1. Architectural Highlights
 
----
-
-## 🏗️ Architecture Overview
-
-The system is decoupled into two primary components to ensure high availability and responsiveness:
-
-```
-                  ┌──────────────────────┐
-                  │ Android Transceiver  │
-                  └──────────┬───────────┘
-                             │
-            ┌────────────────┴────────────────┐
-            │                                 │
-     (HTTP Polling)                   (HTTP Requests)
-            │                                 │
-            ▼                                 ▼
-   ┌─────────────────┐               ┌─────────────────┐
-   │    worker.py    │               │   messages.py   │
-   │ (Sync & Media)  │               │  (API & Views)  │
-   └────────┬────────┘               └────────┬────────┘
-            │                                 │
-            └───────────┐         ┌───────────┘
-                        ▼         ▼
-                   ┌───────────────────┐
-                   │ SQLite Database   │
-                   └───────────────────┘
-
-```
-
-1. **`messages.py` (API & Web Server):** Fast, non-blocking API endpoints powered by **FastAPI**. Serves the frontend templates and handles user actions (sending messages, fetching threads).
-2. **`worker.py` (Background Worker):** An isolated, continuous async process that polls the transceiver inbox, resolves MMS attachment metadata via log inspection, downloads media files to `static/mms/`, and populates the database.
+* **Real-Time Data Pipeline:** Asynchronous webhook processing publishes inbound messages and status updates to an in-memory **SSE Broadcaster**, updating the UI instantly without polling.
+* **Engine-Level Integrity:** Built-in SQLite constraints block "ghost messages" directly at the database layer.
+* **Multi-Boolean Lifecycle Tracking:** Message states (`is_sent`, `is_delivered`, `is_failed`, `is_cancelled`, `web_viewed`) are tracked explicitly as separate boolean flags rather than mutating single strings.
+* **Smart DID Fallback:** Native logic automatically resolves missing gateway sender/recipient identifiers using the configured system DID (`settings.SMS_DID`).
+* **Isolated Contact Management:** Deleting a contact record purges only the address book metadata—message history and thread records remain 100% intact.
 
 ---
 
-## 📁 Directory Structure
+## 💾 Database Schema (`models.py`)
+
+### `messages`
+
+Primary store for all inbound and outbound SMS/MMS conversations.
+
+| Column | Type | Constraints / Defaults | Description |
+| --- | --- | --- | --- |
+| `id` | String | Primary Key (UUID) | Internal primary identifier. |
+| `message_id` | String | Indexed, Unique, Nullable | Native carrier/gateway ID for webhook matching. |
+| `timestamp` | DateTime | Non-null (UTC) | Message timestamp. |
+| `sender` | String | Nullable (E.164) | Sender phone number. |
+| `recipient` | String | Nullable (E.164) | Recipient phone number. |
+| `body` | String | Default: `""` | Message text contents. |
+| `is_sent` | Boolean | Default: `0` | Outbound dispatch state. |
+| `is_delivered` | Boolean | Default: `0` | Delivery confirmation state. |
+| `is_read` | Boolean | Default: `0` | Read state. |
+| `is_failed` | Boolean | Default: `0` | Message failure state. |
+| `is_cancelled` | Boolean | Default: `0` | Cancelled transmission state. |
+| `web_viewed` | Boolean | Default: `0` | UI rendered state. |
+| `error_reason` | Text | Nullable | Captures carrier failure details (`sms:failed`). |
+
+> **Engine Check Constraint:** `CHECK (sender IS NOT NULL OR recipient IS NOT NULL)`
+> *Enforces strict database integrity against ghost bubbles or corrupted carrier webhooks.*
+
+### `attachments`
+
+Stores incoming MMS media files.
+
+| Column | Type | Constraints / Defaults | Description |
+| --- | --- | --- | --- |
+| `id` | Integer | Primary Key (Autoincrement) | Internal ID. |
+| `message_id` | String | Foreign Key $\rightarrow$ `messages.id` (`ON DELETE CASCADE`) | Parent message reference. |
+| `filename` | String | Non-null | Relative static media path (e.g., `/static/media/...`). |
+| `content_type` | String | Nullable | MIME type (e.g., `image/jpeg`). |
+
+### `contacts`
+
+Address book lookup table.
+
+| Column | Type | Constraints / Defaults | Description |
+| --- | --- | --- | --- |
+| `phone_number` | String | Primary Key (E.164) | Normalized contact number. |
+| `name` | String | Non-null | Display name. |
+| `notes` | Text | Nullable | Freeform notes field. |
+
+### `raw_webhooks`
+
+Failsafe dump table for debugging and payload recovery.
+
+| Column | Type | Constraints / Defaults | Description |
+| --- | --- | --- | --- |
+| `id` | Integer | Primary Key (Autoincrement) | Internal ID. |
+| `received_at` | DateTime | Default UTC | Arrival timestamp. |
+| `payload` | Text | Non-null | Raw JSON payload received from gateway. |
+
+---
+
+## 📂 Directory Layout
 
 ```text
-.
-├── frontend/                 # UI HTML Templates
-│   ├── contacts.html         # Contacts management view
-│   ├── header.html           # Reusable navigation header component
-│   └── messages.html         # Main messaging interface and chat threads
-├── routers/                  # FastAPI Modular Route Handlers
-│   ├── __init__.py           # Package initializer
-│   ├── contacts.py           # Contacts API endpoints
-│   └── messages.py           # Messages API endpoints and views
-├── static/                   # Public Static Assets
-│   ├── media/                # Directory for downloaded MMS attachments
-│   └── airport_ding.mp3      # Audio alert for new message notifications
-├── .gitignore                # Git untracked files configuration
-├── bootstrap_db.py           # Database initial setup/seeding script
-├── config.py                 # Environment variables and app configuration
-├── database.py               # SQLite database connection setup
-├── generate_prototype.py     # Mock data generator for testing
-├── LICENSE                   # Mozilla Public License 2.0 (MPL 2.0)
-├── main.py                   # FastAPI application entrypoint
-├── models.py                 # SQLAlchemy database models
-├── README.md                 # Project documentation
-├── requirements.txt          # Python dependencies list
-├── schemas.py                # Pydantic data validation schemas
-├── start_app.sh              # Application startup script
-└── worker.py                 # Background polling worker for SMS/MMS sync
+/
+├── .env.example          # Template environment variable configuration
+├── config.py             # Environment variables & settings
+├── database.py           # SQLAlchemy engine & SessionLocal dependency
+├── models.py             # ORM models & database CheckConstraints
+├── schemas.py            # Pydantic validation schemas
+├── main.py               # Application entrypoint & router registration
+│
+├── services/
+│   └── broadcaster.py    # SSE Event Broadcaster (Pub/Sub hub for web clients)
+│
+├── routers/
+│   ├── send.py           # POST /messages (Dispatches outbound messages)
+│   ├── fetch.py          # GET /messages (Queries database for UI threads)
+│   ├── contacts.py       # CRUD endpoints for contact management
+│   ├── webhooks.py       # POST /webhook/* (Inbound message & status updates)
+│   └── events.py         # GET /events (Server-Sent Events endpoint)
+│
+├── templates/
+│   ├── base.html         # Base Jinja2 layout (Tailwind CDN, CSS/JS includes)
+│   ├── index.html        # Messages & Chat thread interface
+│   ├── contacts.html     # Address book management interface
+│   └── components/
+│       ├── header.html   # Top navigation & status bar
+│       ├── sidebar.html  # Thread list & contact quick-select
+│       └── chat_area.html# Chat history panel & composer input
+│
+└── static/
+    ├── media/            # Saved MMS media files
+    ├── css/
+    │   └── custom.css    # Custom UI styling overrides
+    └── js/
+        ├── sse.js        # EventSource listener for real-time UI updates
+        ├── app.js        # Chat UI rendering, thread logic, & messaging
+        └── contacts.js   # Contact CRUD modal logic
 
 ```
 
 ---
 
-## 🚀 Getting Started
+## 🔌 API Reference & Endpoints
 
-### Prerequisites
+### 1. Messaging (`routers/send.py` & `routers/fetch.py`)
 
-* Python **3.10+**
-* An accessible Android SMS Gateway Transceiver on your local network or public URL.
+* `POST /messages`: Dispatches an outbound SMS payload to the Android API $\rightarrow$ Records initial state in DB $\rightarrow$ Returns non-blocking response.
+* `GET /messages`: Retrieves historical message threads. Supports filtering by `sender`, `recipient`, `from_datetime`, `to_datetime`, and `limit`.
 
-### Installation
+### 2. Webhooks (`routers/webhooks.py`)
 
-### Installation
+* `POST /webhook/inbound`: Processes `sms:received`, `sms:data-received`, and `mms:downloaded` events. Saves Base64 MMS files to `static/media/` and publishes live updates to `broadcaster.py`. *(Ignores preliminary `mms:received` notification headers).*
+* `POST /webhook/status`: Listens for `sms:sent`, `sms:delivered`, `sms:failed`, and `sms:cancelled`. Updates specific status booleans by matching `message_id` and triggers real-time status checkmark updates in the UI.
 
-1. **Clone the repository:**
+### 3. Contact Management (`routers/contacts.py`)
 
-   Choose your preferred platform:
+* `GET /contacts`: Lists all stored contacts or searches by name/number.
+* `POST /contacts`: Adds a new contact (`phone_number`, `name`, `notes`).
+* `PUT /contacts/{phone_number}`: Updates contact details.
+* `DELETE /contacts/{phone_number}`: Deletes the contact record while retaining historical messages.
 
-   * **GitHub:**
-     ```bash
-     git clone [https://github.com/oracle7/sms-gateway.git](https://github.com/oracle7/sms-gateway.git)
-     cd sms-gateway
-     ```
+### 4. Real-Time Event Pipeline (`routers/events.py`)
 
-   * **Codeberg:**
-     ```bash
-     git clone [https://codeberg.org/oracle7/sms-gateway.git](https://codeberg.org/oracle7/sms-gateway.git)
-     cd sms-gateway
-     ```
+* `GET /events`: Opens a persistent `text/event-stream` SSE connection for frontend client push notifications.
 
-2. **Create and activate a virtual environment:**
+---
+
+## 🛠️ Setup & Local Deployment
+
+### 1. Environment Requirements
+
+* Python 3.10+
+* SQLite 3.35+
+
+### 2. Environment Configuration
+
+Copy the provided `.env.example` file to create your active `.env` file, then edit the values to match your gateway setup:
+
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+cp .env.example .env
 
 ```
 
+Modify the parameters inside `.env`:
 
-3. **Install dependencies:**
+```env
+SMS_API_URL="http://<ANDROID_GATEWAY_IP>:<PORT>"
+SMS_API_LOGIN="your_gateway_username"
+SMS_API_PASS="your_gateway_password"
+SMS_DID="+10123456789"
+
+```
+
+### 3. Installation
+
 ```bash
+# Clone the repository
+git clone https://codeberg.org/oracle7/sms-gateway.git
+cd sms-gateway
+
+# Create and activate virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install direct runtime dependencies
 pip install -r requirements.txt
 
-```
-
-
-4. **Configure environment variables:**
-   Copy the example environment file and update it with your transceiver credentials:
-```bash
-   cp .env.example .env
-   nano .env  # Edit the file to set TRANSCEIVER_URL, API_KEY, etc.
-```
-
-
-5. **Run the application:**
-```bash
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+# Start system service or run manually via Uvicorn
+uvicorn main:app --host 0.0.0.0 --port 8000
 
 ```
-
-
-6. **Access the Web Dashboard:**
-Open your browser and navigate to `http://<server_URL>:8000/messages`
 
 ---
 
-## 🛠️ Tech Stack
+## 🚀 Running as a Systemd Service
 
-* **Language:** Python 3.10+
-* **Framework:** [FastAPI](https://fastapi.tiangolo.com/)
-* **Database:** SQLite
-* **HTTP Client:** Requests / HTTPX
-* **Frontend:** Jinja2 Templates, HTML5, CSS3, JavaScript
+For continuous production uptime, run under `systemd`:
 
----
+```ini
+[Unit]
+Description=SMS Gateway Web Platform
+After=network.target
 
-## 📄 License
+[Service]
+User=smsuser
+WorkingDirectory=/var/www/sms-gateway
+ExecStart=/var/www/sms-gateway/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=always
 
-This project is licensed under the Mozilla Public License 2.0 - see the [LICENSE](./LICENSE) file for details.
+[Install]
+WantedBy=multi-user.target
+
+```
