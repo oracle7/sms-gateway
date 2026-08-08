@@ -11,8 +11,7 @@ from database import engine, Base
 from routers import contacts_router, messages_router
 from routers.webhook import router as webhook_router
 
-# IMPORT YOUR WORKER HERE
-# Assuming your worker function is called something like `poll_messages`
+# Import your worker module
 import worker 
 
 logger = logging.getLogger("uvicorn.error")
@@ -26,8 +25,7 @@ async def lifespan(app: FastAPI):
     
     # --- REACTIVATED WORKER ROUTINE ---
     logger.info("Starting background polling worker...")
-    # Replace `worker.poll_messages()` with the actual async function name from worker.py
-    polling_task = asyncio.create_task(worker.poll_messages())
+    polling_task = asyncio.create_task(worker.sync_inbox_loop())
     
     logger.info("SMS Gateway service started (Polling mode active).")
     
