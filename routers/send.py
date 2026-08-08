@@ -58,10 +58,10 @@ async def send_message(payload: schemas.MessageSend, db: Session = Depends(get_d
             raise HTTPException(status_code=502, detail="Network error reaching phone")
 
     # Create the database record. 
-    # Because this is outgoing, sender is NULL, and recipient is populated.
+    # Because this is outgoing, sender is our DID, and recipient is populated.
     db_msg = models.Message(
         message_id=gateway_id if gateway_id else None,
-        sender=None, 
+        sender=settings.SMS_DID, 
         recipient=normalized_recipient,
         body=payload.body or "",
         timestamp=datetime.now(timezone.utc),

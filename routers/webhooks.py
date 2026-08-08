@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from database import get_db
 import models
+from config import settings
 from services.broadcaster import broadcaster
 
 logger = logging.getLogger("uvicorn.error")
@@ -48,7 +49,10 @@ async def handle_inbound(request: Request, db: Session = Depends(get_db)):
         return {"status": "ignored", "reason": "MMS notification header ignored. Waiting for mms:downloaded."}
 
     sender = msg_data.get("sender", msg_data.get("from", ""))
-    recipient = msg_data.get("recipient", msg_data.get("to", ""))
+    
+    # Fall back to our DID if the gateway omits the recipient
+    recipient = msg_data.get("recipient", msg_data.get("to", "")) or settings.SMS_DID
+    
     body = msg_data.get("body", msg_data.get("message", msg_data.get("text", "")))
     message_id = msg_data.get("messageId", msg_data.get("id", None))
 
