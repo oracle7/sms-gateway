@@ -11,8 +11,8 @@ from database import engine, Base
 from routers import contacts_router, messages_router
 from routers.webhook import router as webhook_router
 
-# Import your worker module
-import worker 
+# DISABLED WORKER:
+# import worker 
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -23,21 +23,21 @@ async def lifespan(app: FastAPI):
     
     os.makedirs("static/media", exist_ok=True)
     
-    # --- REACTIVATED WORKER ROUTINE ---
-    logger.info("Starting background polling worker...")
-    polling_task = asyncio.create_task(worker.sync_inbox_loop())
+    # --- DISABLED WORKER ROUTINE ---
+    # logger.info("Starting background polling worker...")
+    # polling_task = asyncio.create_task(worker.sync_inbox_loop())
     
-    logger.info("SMS Gateway service started (Polling mode active).")
+    logger.info("SMS Gateway service started (Webhook mode active).")
     
     yield
     
     # --- CLEANUP ON SHUTDOWN ---
-    logger.info("Cancelling background polling worker...")
-    polling_task.cancel()
-    try:
-        await polling_task
-    except asyncio.CancelledError:
-        pass
+    # logger.info("Cancelling background polling worker...")
+    # polling_task.cancel()
+    # try:
+    #     await polling_task
+    # except asyncio.CancelledError:
+    #     pass
         
     logger.info("SMS Gateway service stopped cleanly.")
 

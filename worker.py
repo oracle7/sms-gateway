@@ -1,285 +1,163 @@
-import asyncio
-import requests
-import sqlite3
+from fastapi import APIRouter, Request, HTTPException, Depends
+from sqlalchemy.orm import Session
 import logging
-import re
+import json
 import os
-import uuid
+import re
+import base64
 from datetime import datetime, timezone
-from config import settings
+import uuid
 
-POLL_INTERVAL = 5
+# Import your database and models
+# Adjust these imports if your file structure is slightly different!
+from database import SessionLocal 
+from models import Message, MessageAttachment, RawWebhookDump
 
-# ---------------------------------------------------------
-# EXCLUSION LISTS (BLACKLIST)
-# ---------------------------------------------------------
-BLOCKED_NUMBERS = {
-    "7184238545",
-    "+17184238545",
-    "7187677043",
-    "+17187677043"
-}
-BLOCKED_MESSAGE_IDS = set()
-
-# ---------------------------------------------------------
-# SETUP & LOGGING
-# ---------------------------------------------------------
 logger = logging.getLogger("uvicorn.error")
-_INITIAL_SYNC_DONE = False
+router = APIRouter()
 
-MEDIA_DIR = "static/mms"
+MEDIA_DIR = "static/media"
 os.makedirs(MEDIA_DIR, exist_ok=True)
 
-def get_db_path():
-    return settings.DATABASE_URL.replace("sqlite:///", "")
-
-def normalize_utc(iso_string):
+# Database dependency
+def get_db():
+    db = SessionLocal()
     try:
-        dt = datetime.fromisoformat(iso_string.replace('Z', '+00:00'))
-        dt_utc = dt.astimezone(timezone.utc).replace(tzinfo=None)
-        return dt_utc.isoformat(sep=' ', timespec='seconds')
-    except ValueError:
-        return datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=' ', timespec='seconds')
+        yield db
+    finally:
+        db.close()
 
-def poll_transceiver(is_initial_sync=False):
-    base_url = f"{settings.SMS_API_URL.rstrip('/')}/inbox" if not settings.SMS_API_URL.endswith('/inbox') else settings.SMS_API_URL
-    logs_url = f"{settings.SMS_API_URL.rstrip('/')}/logs"
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    
-    limit = 500 if is_initial_sync else 50
-    offset = 0
-    total_inserts_this_cycle = 0
+@router.post("/webhook")
+async def receive_webhook(request: Request, db: Session = Depends(get_db)):
+    # ---------------------------------------------------------
+    # STEP 1: CATCH THE RAW PAYLOAD
+    # ---------------------------------------------------------
+    try:
+        payload = await request.json()
+    except Exception:
+        logger.error("Webhook rejected: Invalid JSON received.")
+        raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    logger.info(f"[Sync Loop] Fetching from API: {base_url} with limit={limit}, offset={offset}")
+    # ---------------------------------------------------------
+    # STEP 2: THE FAIL-SAFE DUMP
+    # ---------------------------------------------------------
+    try:
+        raw_dump = RawWebhookDump(payload=json.dumps(payload))
+        db.add(raw_dump)
+        db.commit()
+        logger.info(f"Failsafe triggered: Webhook payload safely stored. (ID: {raw_dump.id})")
+    except Exception as e:
+        logger.error(f"CRITICAL ERROR saving webhook failsafe: {e}")
+        db.rollback()
+        # Force a 500 error so the phone knows the delivery failed and retries later!
+        raise HTTPException(status_code=500, detail="Failsafe storage error")
 
-    while True:
-        try:
-            response = requests.get(
-                base_url, 
-                params={"limit": limit, "offset": offset},
-                auth=(settings.SMS_API_LOGIN, settings.SMS_API_PASS),
-                timeout=10
-            )
-            response.raise_for_status()
-            
-            total_count = int(response.headers.get("X-Total-Count", 0))
-            payload = response.json()
-            messages = payload.get("data", payload) if isinstance(payload, dict) else payload
-            
-            if not messages:
-                logger.info("[Sync Loop] No messages returned in API payload response.")
-                break
-                
-            logger.info(f"[Sync Loop] Received {len(messages)} messages from API payload (Total Remote: {total_count}).")
-            new_inserts_this_page = 0
-            reached_known_messages = False
-
-            for msg in messages:
-                msg_id_str = str(msg.get("id")) if msg.get("id") is not None else None
-                
-                # Robust phone number extraction
-                raw_number = msg.get("sender") or msg.get("recipient") or msg.get("address") or msg.get("from") or ""
-                raw_number = str(raw_number).strip()
-                if not raw_number or raw_number == "null":
-                    raw_number = "UNKNOWN"
-                    logger.warning(f"[{msg_id_str}] Phone number not found! Payload: {msg}")
-                
-                body = msg.get("contentPreview", msg.get("body", ""))
-                msg_type = msg.get("type", "")
-                
-                if not msg_id_str or msg_id_str in BLOCKED_MESSAGE_IDS or raw_number in BLOCKED_NUMBERS:
-                    continue
-
-                # Identify if message is MMS
-                is_mms = msg_type in ["MMS", "MMS_DOWNLOADED"] or "MMS" in body
-                
-                # Transforms notification into image container (clears "MMS notification" text)
-                if is_mms:
-                    body = ""
-                    logger.info(f"\n\n=== RAW MMS PAYLOAD START ===\n{msg}\n=== RAW MMS PAYLOAD END ===\n\n")
-
-                # Duplicate prevention
-                cursor.execute("SELECT 1 FROM messages WHERE id = ?", (msg_id_str,))
-                if cursor.fetchone():
-                    reached_known_messages = True
-                    continue
-
-                raw_timestamp = msg.get("createdAt", msg.get("timestamp", "")) 
-                utc_timestamp = normalize_utc(raw_timestamp)
-                is_inbound = True if "sender" in msg else False
-
-                try:
-                    cursor.execute('''
-                        INSERT INTO messages (id, raw_number, body, timestamp, is_inbound)
-                        VALUES (?, ?, ?, ?, ?)
-                    ''', (msg_id_str, raw_number, body, utc_timestamp, is_inbound))
-                    
-                    # ==========================================
-                    # MMS EXTRACTION & MATCHING LOGIC
-                    # ==========================================
-                    if is_mms and msg_id_str:
-                        logger.info(f"[{msg_id_str}] Cross-referencing MMS data for {raw_number} in logs...")
-                        try:
-                            logs_response = requests.get(
-                                logs_url,
-                                auth=(settings.SMS_API_LOGIN, settings.SMS_API_PASS),
-                                timeout=15.0
-                            )
-                            logs_text = logs_response.text
-                            
-                            real_mms_id = None
-                            clean_number = raw_number.replace("+", "")
-                            
-                            # Search for the real download ID associated with the sender's number
-                            lines = logs_text.split('\n')
-                            for i, line in enumerate(lines):
-                                if clean_number in line or raw_number in line:
-                                    window = " ".join(lines[max(0, i-10):min(len(lines), i+10)])
-                                    match = re.search(r'(?:id["\':\s]*|mms:)(\d{3,8})', window, re.IGNORECASE)
-                                    if match:
-                                        real_mms_id = match.group(1)
-                                        break
-                            
-                            if not real_mms_id:
-                                logger.warning(f"[{msg_id_str}] Real ID not found in logs for {raw_number}. Falling back to original ID.")
-                                real_mms_id = msg_id_str.replace("mms:", "").replace("sms:", "")
-                            else:
-                                logger.info(f"[{msg_id_str}] Real MMS ID found: {real_mms_id}")
-
-                            # Attempt to find partIDs, with fallback to 0, 1, and 2
-                            part_ids_found = re.findall(r'(\d+)\s*\{\s*contentType:', logs_text)
-                            if not part_ids_found:
-                                part_ids_found = ['0', '1', '2']
-                            else:
-                                part_ids_found = list(set(part_ids_found))
-                            
-                            # Download using the real ID, but save linked to the original ID
-                            for part_id in part_ids_found:
-                                download_url = f"{base_url}/{real_mms_id}/attachments/{part_id}"
-                                logger.info(f"[{msg_id_str}] Requesting attachment from: {download_url}")
-                                
-                                att_resp = requests.get(
-                                    download_url, 
-                                    auth=(settings.SMS_API_LOGIN, settings.SMS_API_PASS),
-                                    timeout=15.0
-                                )
-                                
-                                logger.info(f"[{msg_id_str}] Attachment part {part_id} response: Status {att_resp.status_code}, Size {len(att_resp.content)} bytes")
-                                
-                                if att_resp.status_code == 200 and len(att_resp.content) > 0:
-                                    content_type = att_resp.headers.get("Content-Type", "application/octet-stream")
-                                    
-                                    # Check if this part is a text message inside MMS
-                                    if "text/plain" in content_type:
-                                        mms_text = att_resp.content.decode("utf-8", errors="ignore").strip()
-                                        if mms_text:
-                                            cursor.execute("UPDATE messages SET body = ? WHERE id = ?", (mms_text, msg_id_str))
-                                            logger.info(f"[{msg_id_str}] Extracted text body from MMS part {part_id}: {mms_text}")
-                                        continue
-
-                                    # Process image or media binary attachments
-                                    ext = content_type.split("/")[-1] if "/" in content_type else "bin"
-                                    if ext == "jpeg": 
-                                        ext = "jpg"
-                                    
-                                    unique_filename = f"{uuid.uuid4().hex}_part{part_id}.{ext}"
-                                    filepath = os.path.join(MEDIA_DIR, unique_filename)
-                                    
-                                    with open(filepath, 'wb') as f:
-                                        f.write(att_resp.content)
-                                        
-                                    logger.info(f"[{msg_id_str}] MMS media saved successfully: {filepath}")
-                                        
-                                    cursor.execute('''
-                                        INSERT INTO message_attachments (message_id, media_url, content_type)
-                                        VALUES (?, ?, ?)
-                                    ''', (msg_id_str, f"/static/mms/{unique_filename}", content_type))
-                                    
-                        except Exception as e:
-                            logger.error(f"[Sync Loop] Error processing MMS (ID: {msg_id_str}): {str(e)}")
-                    # ==========================================
-
-                    new_inserts_this_page += 1
-                except sqlite3.IntegrityError:
-                    reached_known_messages = True
-
-            total_inserts_this_cycle += new_inserts_this_page
-            
-            if new_inserts_this_page > 0:
-                conn.commit()
-                logger.info(f"[Sync Loop] DB Commit successful. Saved {new_inserts_this_page} items.")
-
-            # --- Pagination State ---
-            if is_initial_sync:
-                offset += limit
-                if offset >= total_count:
-                    break 
-            else:
-                if reached_known_messages or len(messages) < limit:
-                    break
-                else:
-                    offset += limit
-                    limit = 500 
-
-        except requests.RequestException as e:
-            logger.error(f"[Sync Loop] Network error: {e}")
-            break
-        except Exception as e:
-            logger.error(f"[Sync Loop] Processing error: {e}")
-            break
-
-    if total_inserts_this_cycle > 0:
-        sync_type = "Historical Batch" if is_initial_sync else "Polling"
-        logger.info(f"[{sync_type}] Cycle finished. Total new rows committed: {total_inserts_this_cycle}")
+    # ---------------------------------------------------------
+    # STEP 3: PROCESS AND EXTRACT METADATA
+    # ---------------------------------------------------------
+    try:
+        # Some webhooks wrap the message in a "message" or "data" key, others send it flat.
+        msg_data = payload.get("message", payload.get("data", payload))
         
-    conn.close()
+        # --- NEW: IGNORE MMS HEADERS ---
+        msg_type = msg_data.get("type")
+        if msg_type == "MMS":
+            logger.info("Ignoring MMS notification header payload.")
+            return {"status": "ignored", "reason": "MMS notification header"}
 
-async def sync_inbox_loop():
-    global _INITIAL_SYNC_DONE
-    logger.info("Starting SMS Gateway Async Sync Worker...")
-    
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS messages (
-            id TEXT PRIMARY KEY,
-            gateway_id TEXT,
-            raw_number TEXT NOT NULL,
-            body TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            is_inbound BOOLEAN NOT NULL,
-            status TEXT DEFAULT 'delivered'
+        gateway_id_str = str(msg_data.get("id", ""))
+        
+        # Check for duplicates so we don't save the same retry twice
+        if gateway_id_str:
+            existing_msg = db.query(Message).filter(Message.gateway_id == gateway_id_str).first()
+            if existing_msg:
+                logger.info(f"Webhook received duplicate message (Gateway ID: {gateway_id_str}). Ignoring.")
+                return {"status": "success", "message": "Already processed"}
+
+        raw_number = msg_data.get("sender", msg_data.get("from", ""))
+        is_inbound = True
+        
+        # --- NEW: GHOST SENDER PREVENTION ---
+        if not raw_number or raw_number == "null" or str(raw_number).lower() == "unknown":
+            # Check if it's an outgoing message the app is syncing
+            recipient = msg_data.get("recipient", msg_data.get("to", ""))
+            if recipient and recipient != "null" and str(recipient).lower() != "unknown":
+                raw_number = recipient
+                is_inbound = False
+            else:
+                logger.warning(f"Skipping payload {gateway_id_str} with unknown sender/recipient.")
+                return {"status": "ignored", "reason": "Unknown sender"}
+
+        body = msg_data.get("body", msg_data.get("contentPreview", msg_data.get("text", "")))
+        
+        # We generate our own internal UUID, but keep the gateway_id
+        internal_id = str(uuid.uuid4())
+        
+        new_message = Message(
+            id=internal_id,
+            gateway_id=gateway_id_str if gateway_id_str else None,
+            raw_number=raw_number,
+            body=body,
+            timestamp=datetime.now(timezone.utc),
+            is_inbound=is_inbound,
+            status="delivered"
         )
-    ''')
-    
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS message_attachments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            message_id TEXT NOT NULL,
-            media_url TEXT NOT NULL,
-            content_type TEXT,
-            FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
-        )
-    ''')
-    conn.commit()
-    
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM messages")
-    local_count = cursor.fetchone()[0]
-    conn.close()
-    
-    logger.info(f"Database baseline check complete. Found {local_count} local records.")
-    _INITIAL_SYNC_DONE = (local_count > 0)
-    
-    while True:
-        if not _INITIAL_SYNC_DONE:
-            logger.info("Local database is clean. Starting full history backfill...")
-            await asyncio.to_thread(poll_transceiver, True)
-            _INITIAL_SYNC_DONE = True
-        else:
-            await asyncio.to_thread(poll_transceiver, False)
-            
-        await asyncio.sleep(POLL_INTERVAL)
+        db.add(new_message)
+
+        # ---------------------------------------------------------
+        # STEP 4: PROCESS MEDIA / ATTACHMENTS
+        # ---------------------------------------------------------
+        attachments = msg_data.get("attachments", [])
+        
+        if attachments:
+            # Clean the phone number for the filename (keep only digits)
+            clean_number = re.sub(r'\D', '', raw_number)
+            if not clean_number:
+                clean_number = "unknown"
+                
+            # Create the YYYYMMDD_HHMMSS string
+            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            for index, att in enumerate(attachments):
+                content_type = att.get("contentType", "application/octet-stream")
+                
+                # SMS Gateway usually sends base64 under 'data', 'content', or 'base64'
+                b64_data = att.get("data", att.get("content", att.get("base64", "")))
+                
+                if b64_data:
+                    # Determine extension
+                    ext = content_type.split("/")[-1] if "/" in content_type else "bin"
+                    if ext == "jpeg": 
+                        ext = "jpg"
+                        
+                    # Create the perfect filename: [number]_[datetime]_[index].[ext]
+                    filename = f"{clean_number}_{timestamp_str}_{index}.{ext}"
+                    filepath = os.path.join(MEDIA_DIR, filename)
+                    
+                    # Decode and save the file
+                    with open(filepath, "wb") as f:
+                        f.write(base64.b64decode(b64_data))
+                        
+                    logger.info(f"Media saved successfully: {filepath}")
+                    
+                    # Link to database
+                    db_attachment = MessageAttachment(
+                        message_id=internal_id,
+                        media_url=f"/static/media/{filename}",
+                        content_type=content_type
+                    )
+                    db.add(db_attachment)
+
+        # ---------------------------------------------------------
+        # STEP 5: COMMIT AND ACKNOWLEDGE
+        # ---------------------------------------------------------
+        db.commit()
+        logger.info(f"Webhook processing complete for message from {raw_number}.")
+        return {"status": "success", "message": "Webhook processed safely"}
+
+    except Exception as e:
+        logger.error(f"Error processing webhook data: {e}")
+        db.rollback()
+        # The raw payload is ALREADY saved from Step 2, so data is safe.
+        # We throw 500 so the app retries.
+        raise HTTPException(status_code=500, detail="Processing error")
