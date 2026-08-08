@@ -1,14 +1,24 @@
-<header class="bg-white shadow-sm border-b px-6 py-4 flex items-center justify-between shrink-0">
+﻿<header class="bg-white shadow-sm border-b px-6 py-4 flex items-center justify-between shrink-0">
     <div class="flex items-center space-x-4">
-        <h1 class="text-xl font-bold text-blue-600 tracking-tight">Parla!</h1>
+        <!-- Renamed for the medical practice -->
+        <h1 class="text-xl font-bold text-blue-600 tracking-tight">Practice SMS</h1>
         <nav class="hidden md:flex space-x-4 ml-6">
             <a href="/" class="text-gray-600 hover:text-blue-600 font-medium">Messages</a>
             <a href="/contacts" class="text-gray-600 hover:text-blue-600 font-medium">Contacts</a>
         </nav>
     </div>
-    <div class="flex items-center space-x-2">
-        <span class="text-sm text-gray-500">Phone Connection:</span>
-        <!-- SSE connection indicator updated by sse.js -->
-        <div id="connection-indicator" class="w-3 h-3 rounded-full bg-yellow-500" title="Connecting..."></div>
+
+    <!-- Pixel 6 Device Monitor -->
+    <div class="flex items-center space-x-3 bg-slate-50 px-3 py-1.5 rounded-full border border-slate-200 shadow-inner">
+        <span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Pixel 6</span>
+
+        <!-- Battery Stats -->
+        <div class="flex items-center text-xs font-bold text-slate-700 bg-white px-2 py-0.5 rounded shadow-sm border border-slate-100">
+            <span id="battery-level">--%</span>
+            <span id="battery-charging" class="ml-1 hidden text-yellow-500" title="Charging">⚡</span>
+        </div>
+
+        <!-- Dynamic Health LED -->
+        <div id="device-health-led" class="w-3 h-3 rounded-full bg-slate-300 ml-1" title="Waiting for ping..."></div>
     </div>
 </header>

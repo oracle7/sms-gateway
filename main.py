@@ -10,7 +10,7 @@ from database import engine, Base
 import models
 
 # Import our modular routers (we will create these files next!)
-from routers import send, fetch, contacts, webhooks, events
+from routers import send, fetch, contacts, webhooks, events, health
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -47,6 +47,7 @@ app.include_router(fetch.router, prefix="/api/messages", tags=["Fetch"])
 app.include_router(contacts.router, prefix="/api/contacts", tags=["Contacts"])
 app.include_router(webhooks.router, prefix="/webhook", tags=["Webhooks"])
 app.include_router(events.router, prefix="/events", tags=["Real-Time SSE"])
+app.include_router(health.router, prefix="/health", tags=["Health"])
 
 # --- PAGE ROUTES ---
 @app.get("/")

@@ -11,14 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
         evtSource = new EventSource(SSE_URL);
 
         evtSource.onopen = () => {
-            console.log('[SSE] Connected.');
-            // Optional: Update a connection indicator in the header if it exists
-            const indicator = document.getElementById('connection-indicator');
-            if (indicator) {
-                indicator.classList.remove('bg-red-500', 'bg-yellow-500');
-                indicator.classList.add('bg-green-500');
-                indicator.title = "Connected to phone";
-            }
+            console.log('[SSE] Connected to Event Stream.');
         };
 
         evtSource.onmessage = (event) => {
@@ -26,11 +19,49 @@ document.addEventListener('DOMContentLoaded', () => {
                 const payload = JSON.parse(event.data);
                 console.log(`[SSE] Event Received: ${payload.type}`, payload.data);
 
-                // Dispatch global events so other scripts (like app.js) can react
                 if (payload.type === 'new_message') {
                     window.dispatchEvent(new CustomEvent('sse:new_message', { detail: payload.data }));
-                } else if (payload.type === 'status_update') {
+                }
+                else if (payload.type === 'status_update') {
                     window.dispatchEvent(new CustomEvent('sse:status_update', { detail: payload.data }));
+                }
+                // --- NEW HEALTH UPDATE HANDLER ---
+                else if (payload.type === 'health_update') {
+                    const data = payload.data;
+
+                    // Update Battery Text
+                    const batLevel = document.getElementById('battery-level');
+                    if (batLevel) batLevel.textContent = data.battery_level + '%';
+
+                    // Toggle Lightning Bolt Icon
+                    const batCharging = document.getElementById('battery-charging');
+                    if (batCharging) {
+                        if (data.is_charging) {
+                            batCharging.classList.remove('hidden');
+                        } else {
+                            batCharging.classList.add('hidden');
+                        }
+                    }
+
+                    // Update LED Color based on status
+                    const led = document.getElementById('device-health-led');
+                    if (led) {
+                        // Clear existing colors
+                        led.classList.remove('bg-slate-300', 'bg-green-500', 'bg-yellow-500', 'bg-red-500', 'animate-pulse');
+
+                        if (data.status === 'pass') {
+                            led.classList.add('bg-green-500');
+                            led.title = "System Healthy";
+                        } else if (data.status === 'warn') {
+                            led.classList.add('bg-yellow-500');
+                            led.title = "Warning: Check Device";
+                        } else if (data.status === 'fail') {
+                            led.classList.add('bg-red-500', 'animate-pulse');
+                            led.title = "Critical Failure";
+                        } else {
+                            led.classList.add('bg-slate-300');
+                        }
+                    }
                 }
             } catch (error) {
                 console.error('[SSE] Error parsing event data:', error);
@@ -39,11 +70,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         evtSource.onerror = (error) => {
             console.warn('[SSE] Connection lost. Reconnecting...', error);
-            const indicator = document.getElementById('connection-indicator');
-            if (indicator) {
-                indicator.classList.remove('bg-green-500');
-                indicator.classList.add('bg-red-500');
-                indicator.title = "Disconnected";
+            const led = document.getElementById('device-health-led');
+            if (led) {
+                led.classList.remove('bg-green-500', 'bg-yellow-500');
+                led.classList.add('bg-red-500');
+                led.title = "SSE Disconnected";
             }
         };
     }
