@@ -52,9 +52,9 @@ app.include_router(events.router, prefix="/events", tags=["Real-Time SSE"])
 @app.get("/")
 async def index_page(request: Request):
     """Serves the main messaging/chat interface."""
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="index.html")
 
 @app.get("/contacts")
 async def contacts_page(request: Request):
     """Serves the contact management interface."""
-    return templates.TemplateResponse("contacts.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="contacts.html")
