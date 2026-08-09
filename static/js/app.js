@@ -22,6 +22,16 @@ document.addEventListener('DOMContentLoaded', () => {
     let alertInterval = null;
     let activeTimer = null;
 
+    // Normalization helper (E.164 Standard)
+    function normalizePhone(phone, defaultCountryCode = '1') {
+        if (!phone) return '';
+        let cleaned = phone.trim().replace(/[^\d+]/g, '');
+        if (cleaned.startsWith('+')) return '+' + cleaned.replace(/\D/g, '');
+        if (cleaned.length === 10) return `+${defaultCountryCode}${cleaned}`;
+        if (cleaned.length === 11 && cleaned.startsWith(defaultCountryCode)) return `+${cleaned}`;
+        return `+${cleaned}`;
+    }
+
     // 1. Boot up
     async function init() {
         await loadContactsMap();
@@ -31,7 +41,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const urlParams = new URLSearchParams(window.location.search);
         const phoneParam = urlParams.get('phone');
         if (phoneParam) {
-            openThread(phoneParam);
+            openThread(normalizePhone(phoneParam));
         }
     }
 
@@ -41,7 +51,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await fetch('/api/contacts/');
             const contacts = await res.json();
             contacts.forEach(c => {
-                contactsCache[c.phone_number] = c.name;
+                contactsCache[normalizePhone(c.phone_number)] = c.name;
             });
         } catch (err) {
             console.error('Failed to load contacts map', err);
@@ -56,7 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const threads = {};
             messages.forEach(msg => {
-                const contactPhone = msg.sender || msg.recipient;
+                const contactPhone = normalizePhone(msg.sender || msg.recipient);
                 if (!contactPhone) return;
 
                 if (!threads[contactPhone]) {
@@ -114,27 +124,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 4. Open a specific chat
     async function openThread(phone) {
-        activePhone = phone;
+        activePhone = normalizePhone(phone);
 
         // Update Right Sidebar Details
-        const name = contactsCache[phone] || phone;
+        const name = contactsCache[activePhone] || activePhone;
         if (rightContactName) rightContactName.textContent = name;
-        if (rightContactPhone) rightContactPhone.textContent = phone;
+        if (rightContactPhone) rightContactPhone.textContent = activePhone;
         if (contactInitial) contactInitial.textContent = name.charAt(0).toUpperCase();
 
         loadThreads(); // Re-render to highlight active thread
 
         try {
             const [inbound, outbound] = await Promise.all([
-                fetch(`/api/messages/?sender=${encodeURIComponent(phone)}`).then(r => r.json()),
-                fetch(`/api/messages/?recipient=${encodeURIComponent(phone)}`).then(r => r.json())
+                fetch(`/api/messages/?sender=${encodeURIComponent(activePhone)}`).then(r => r.json()),
+                fetch(`/api/messages/?recipient=${encodeURIComponent(activePhone)}`).then(r => r.json())
             ]);
 
             const allMessages = [...inbound, ...outbound].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
             renderChatArea(allMessages);
-
-            // NOTE: Here you would optionally send a PATCH request to your backend 
-            // to mark web_viewed = true for all inbound messages in this thread.
 
         } catch (err) {
             console.error('Failed to load chat history', err);
@@ -277,7 +284,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 8. Listen to SSE Broadcasts
     window.addEventListener('sse:new_message', (e) => {
         const msg = e.detail;
-        const involvedPhone = msg.sender || msg.recipient;
+        const involvedPhone = normalizePhone(msg.sender || msg.recipient);
 
         if (activePhone === involvedPhone) {
             appendMessageBubble(msg);

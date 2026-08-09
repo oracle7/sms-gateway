@@ -15,6 +15,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let isEditMode = false;
 
+    // Normalization helper (E.164 Standard)
+    function normalizePhone(phone, defaultCountryCode = '1') {
+        if (!phone) return '';
+        let cleaned = phone.trim().replace(/[^\d+]/g, '');
+        if (cleaned.startsWith('+')) return '+' + cleaned.replace(/\D/g, '');
+        if (cleaned.length === 10) return `+${defaultCountryCode}${cleaned}`;
+        if (cleaned.length === 11 && cleaned.startsWith(defaultCountryCode)) return `+${cleaned}`;
+        return `+${cleaned}`;
+    }
+
     // 1. Fetch and render contacts
     async function fetchContacts() {
         try {
@@ -31,16 +41,17 @@ document.addEventListener('DOMContentLoaded', () => {
         contactsTable.innerHTML = '';
 
         contacts.forEach(c => {
+            const normPhone = normalizePhone(c.phone_number);
             const tr = document.createElement('tr');
             tr.className = "border-b hover:bg-gray-50";
             tr.innerHTML = `
                 <td class="p-3 font-medium">${c.name}</td>
-                <td class="p-3">${c.phone_number}</td>
+                <td class="p-3">${normPhone}</td>
                 <td class="p-3 text-gray-500">${c.notes || ''}</td>
                 <td class="p-3">
-                    <a href="/?phone=${encodeURIComponent(c.phone_number)}" class="text-blue-500 hover:underline mr-3">Chat</a>
-                    <button class="text-yellow-500 hover:underline mr-3" onclick="openEditModal('${c.phone_number}', '${c.name}', '${c.notes || ''}')">Edit</button>
-                    <button class="text-red-500 hover:underline" onclick="deleteContact('${c.phone_number}')">Delete</button>
+                    <a href="/?phone=${encodeURIComponent(normPhone)}" class="text-blue-500 hover:underline mr-3">Chat</a>
+                    <button class="text-yellow-500 hover:underline mr-3" onclick="openEditModal('${normPhone}', '${c.name}', '${c.notes || ''}')">Edit</button>
+                    <button class="text-red-500 hover:underline" onclick="deleteContact('${normPhone}')">Delete</button>
                 </td>
             `;
             contactsTable.appendChild(tr);
@@ -59,7 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.openEditModal = (phone, name, notes) => {
         isEditMode = true;
         modalTitle.textContent = "Edit Contact";
-        phoneInput.value = phone;
+        phoneInput.value = normalizePhone(phone);
         phoneInput.disabled = true; // Primary key, cannot change
         nameInput.value = name;
         notesInput.value = notes;
@@ -80,16 +91,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 notes: notesInput.value
             };
 
+            const normalizedPhone = normalizePhone(phoneInput.value);
+
             try {
                 let res;
                 if (isEditMode) {
-                    res = await fetch(`/api/contacts/${encodeURIComponent(phoneInput.value)}`, {
+                    res = await fetch(`/api/contacts/${encodeURIComponent(normalizedPhone)}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
                     });
                 } else {
-                    payload.phone_number = phoneInput.value;
+                    payload.phone_number = normalizedPhone;
                     res = await fetch('/api/contacts/', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -112,12 +125,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 4. Delete Contact
     window.deleteContact = async (phone) => {
-        if (!confirm(`Are you sure you want to delete the contact ${phone}? Your message history will remain intact.`)) {
+        const normalizedPhone = normalizePhone(phone);
+        if (!confirm(`Are you sure you want to delete the contact ${normalizedPhone}? Your message history will remain intact.`)) {
             return;
         }
 
         try {
-            const res = await fetch(`/api/contacts/${encodeURIComponent(phone)}`, {
+            const res = await fetch(`/api/contacts/${encodeURIComponent(normalizedPhone)}`, {
                 method: 'DELETE'
             });
 
