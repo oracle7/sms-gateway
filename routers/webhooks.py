@@ -48,12 +48,17 @@ async def handle_inbound(request: Request, db: Session = Depends(get_db)):
     if action == "mms:received":
         return {"status": "ignored", "reason": "MMS notification header ignored. Waiting for mms:downloaded."}
 
-    sender = msg_data.get("sender", msg_data.get("from", ""))
+    # FIX 1: Explicitly check for 'address' which is used by the Android gateway for incoming SMS
+    sender = msg_data.get("address", msg_data.get("sender", msg_data.get("from", "")))
     
     # Fall back to our DID if the gateway omits the recipient
     recipient = msg_data.get("recipient", msg_data.get("to", "")) or settings.SMS_DID
     
-    body = msg_data.get("body", msg_data.get("message", msg_data.get("text", "")))
+    # FIX 2: Prioritize 'text' from the payload, with failsafes
+    body = msg_data.get("text", msg_data.get("body", msg_data.get("message", "")))
+    if isinstance(body, dict):
+        body = body.get("text", "")
+        
     message_id = msg_data.get("messageId", msg_data.get("id", None))
 
     # Strict Ghost-Blocking: We must have at least a sender or a recipient
