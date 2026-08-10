@@ -71,15 +71,16 @@ document.addEventListener('DOMContentLoaded', () => {
             messages.forEach(msg => {
                 const normSender = normalizePhone(msg.sender);
                 const normRecipient = normalizePhone(msg.recipient);
-                
-                // Determine who the "other" party is
-                let contactPhone;
-                if (normSender === SYSTEM_PHONE || !normSender) {
-                    contactPhone = normRecipient;
-                } else {
+
+                // Determine who the remote contact is by explicitly filtering out our own DID
+                let contactPhone = null;
+                if (normSender && normSender !== SYSTEM_PHONE) {
                     contactPhone = normSender;
+                } else if (normRecipient && normRecipient !== SYSTEM_PHONE) {
+                    contactPhone = normRecipient;
                 }
 
+                // Skip orphaned or self-referencing messages entirely
                 if (!contactPhone) return;
 
                 if (!threads[contactPhone]) {
@@ -331,14 +332,19 @@ document.addEventListener('DOMContentLoaded', () => {
     // 8. Listen to SSE Broadcasts
     window.addEventListener('sse:new_message', (e) => {
         const msg = e.detail;
-        
+
         const normSender = normalizePhone(msg.sender);
         const normRecipient = normalizePhone(msg.recipient);
-        
-        // Find who the other person is to update their specific thread
-        const involvedPhone = (normSender === SYSTEM_PHONE || !normSender) ? normRecipient : normSender;
 
-        if (activePhone === involvedPhone) {
+        // Find who the other person is to update their specific thread
+        let involvedPhone = null;
+        if (normSender && normSender !== SYSTEM_PHONE) {
+            involvedPhone = normSender;
+        } else if (normRecipient && normRecipient !== SYSTEM_PHONE) {
+            involvedPhone = normRecipient;
+        }
+
+        if (activePhone === involvedPhone && involvedPhone !== null) {
             appendMessageBubble(msg);
         }
 
