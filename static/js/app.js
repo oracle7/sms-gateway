@@ -169,13 +169,47 @@ document.addEventListener('DOMContentLoaded', () => {
         bubble.dataset.internalId = msg.id;
         bubble.className = `max-w-md p-3 rounded-2xl mb-2 chat-bubble-animate ${isOutbound ? 'bg-blue-500 text-white self-end ml-auto rounded-br-sm' : 'bg-white border border-gray-200 text-gray-800 self-start mr-auto rounded-bl-sm shadow-sm'}`;
 
-        let mediaHtml = '';
-        if (msg.attachments && msg.attachments.length > 0) {
+        // Construct the content area (Text + Attachments or MMS absent fallback)
+        let contentHtml = '';
+        const hasText = msg.body && msg.body.trim() !== '';
+        const hasMedia = msg.attachments && msg.attachments.length > 0;
+
+        if (hasText) {
+            contentHtml += `<div class="text-sm leading-relaxed">${msg.body}</div>`;
+        }
+
+        if (hasMedia) {
             msg.attachments.forEach(att => {
-                mediaHtml += `<img src="${att.filename}" class="max-w-xs rounded mt-2" />`;
+                const contentType = att.content_type || '';
+                const fileUrl = att.filename;
+                const outBoundErrorColor = isOutbound ? 'text-blue-200' : 'text-gray-500';
+
+                if (contentType.startsWith('image/')) {
+                    // Render Images
+                    contentHtml += `<img src="${fileUrl}" class="max-w-xs rounded mt-2" alt="Image Attachment" onerror="this.outerHTML='<div class=\\'text-sm italic mt-2 ${outBoundErrorColor}\\'>[Image link broken]</div>'" />`;
+
+                } else if (contentType.startsWith('audio/')) {
+                    // Render Audio Player
+                    contentHtml += `<audio controls src="${fileUrl}" class="mt-2 max-w-xs" onerror="this.outerHTML='<div class=\\'text-sm italic mt-2 ${outBoundErrorColor}\\'>[Audio link broken]</div>'"></audio>`;
+
+                } else if (contentType.startsWith('video/')) {
+                    // Render Video Player
+                    contentHtml += `<video controls src="${fileUrl}" class="max-w-xs rounded mt-2" onerror="this.outerHTML='<div class=\\'text-sm italic mt-2 ${outBoundErrorColor}\\'>[Video link broken]</div>'"></video>`;
+
+                } else {
+                    // Render fallback link for PDFs, vCards, Documents, etc.
+                    const displayName = fileUrl.split('/').pop() || 'Download File';
+                    const linkColor = isOutbound ? 'text-white' : 'text-blue-600';
+                    contentHtml += `<a href="${fileUrl}" target="_blank" rel="noopener noreferrer" class="block mt-2 underline truncate max-w-xs ${linkColor}" title="Download ${displayName}">📎 ${displayName}</a>`;
+                }
             });
         }
 
+        if (!hasText && !hasMedia) {
+            contentHtml = `<div class="text-sm italic ${isOutbound ? 'text-blue-200' : 'text-gray-500'}">[MMS absent]</div>`;
+        }
+
+        // Delivery status formatting
         let statusHtml = '';
         if (isOutbound) {
             if (msg.is_failed) statusHtml = `<span class="text-red-300 text-xs ml-2" title="${msg.error_reason || 'Failed'}">❌</span>`;
@@ -184,11 +218,18 @@ document.addEventListener('DOMContentLoaded', () => {
             else statusHtml = `<span class="text-gray-300 text-xs ml-2" title="Sending">...</span>`;
         }
 
+        // Formatted timestamp including date and time
+        const formattedDate = new Date(msg.timestamp).toLocaleString([], {
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+
         bubble.innerHTML = `
-            <div class="text-sm leading-relaxed">${msg.body}</div>
-            ${mediaHtml}
+            ${contentHtml}
             <div class="text-right text-[10px] mt-1 ${isOutbound ? 'text-blue-100' : 'text-gray-400'}">
-                ${new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                ${formattedDate}
                 ${statusHtml}
             </div>
         `;
