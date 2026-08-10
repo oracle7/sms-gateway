@@ -3,6 +3,9 @@
  * Controls the main messaging interface (thread list, chat area, and sidebars).
  */
 document.addEventListener('DOMContentLoaded', () => {
+    // Define the system's phone number here to determine message direction
+    const SYSTEM_PHONE = '+19296141937';
+
     const threadList = document.getElementById('thread-list');
     const chatArea = document.getElementById('chat-area');
     const messageForm = document.getElementById('message-form');
@@ -66,7 +69,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const threads = {};
             messages.forEach(msg => {
-                const contactPhone = normalizePhone(msg.sender || msg.recipient);
+                const normSender = normalizePhone(msg.sender);
+                const normRecipient = normalizePhone(msg.recipient);
+                
+                // Determine who the "other" party is
+                let contactPhone;
+                if (normSender === SYSTEM_PHONE || !normSender) {
+                    contactPhone = normRecipient;
+                } else {
+                    contactPhone = normSender;
+                }
+
                 if (!contactPhone) return;
 
                 if (!threads[contactPhone]) {
@@ -94,8 +107,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const name = contactsCache[phone] || phone;
             const previewText = data.latestMsg.body || 'Media message';
 
-            // Check for unread based on web_viewed boolean
-            const isOutbound = data.latestMsg.sender === null;
+            // Check for unread. Fallback logic: if sender is SYSTEM_PHONE or null, it's outbound.
+            const msgSender = normalizePhone(data.latestMsg.sender);
+            const isOutbound = msgSender === SYSTEM_PHONE || !msgSender;
             const isUnread = !isOutbound && (data.latestMsg.web_viewed === false || data.latestMsg.web_viewed === 0);
 
             let containerClasses = `p-4 border-b border-gray-100 cursor-pointer transition-colors relative `;
@@ -163,7 +177,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function appendMessageBubble(msg) {
         if (!chatArea) return;
-        const isOutbound = msg.sender === null;
+        const msgSender = normalizePhone(msg.sender);
+        const isOutbound = msgSender === SYSTEM_PHONE || !msgSender;
 
         const bubble = document.createElement('div');
         bubble.dataset.internalId = msg.id;
@@ -185,19 +200,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 const outBoundErrorColor = isOutbound ? 'text-blue-200' : 'text-gray-500';
 
                 if (contentType.startsWith('image/')) {
-                    // Render Images
                     contentHtml += `<img src="${fileUrl}" class="max-w-xs rounded mt-2" alt="Image Attachment" onerror="this.outerHTML='<div class=\\'text-sm italic mt-2 ${outBoundErrorColor}\\'>[Image link broken]</div>'" />`;
-
                 } else if (contentType.startsWith('audio/')) {
-                    // Render Audio Player
                     contentHtml += `<audio controls src="${fileUrl}" class="mt-2 max-w-xs" onerror="this.outerHTML='<div class=\\'text-sm italic mt-2 ${outBoundErrorColor}\\'>[Audio link broken]</div>'"></audio>`;
-
                 } else if (contentType.startsWith('video/')) {
-                    // Render Video Player
                     contentHtml += `<video controls src="${fileUrl}" class="max-w-xs rounded mt-2" onerror="this.outerHTML='<div class=\\'text-sm italic mt-2 ${outBoundErrorColor}\\'>[Video link broken]</div>'"></video>`;
-
                 } else {
-                    // Render fallback link for PDFs, vCards, Documents, etc.
                     const displayName = fileUrl.split('/').pop() || 'Download File';
                     const linkColor = isOutbound ? 'text-white' : 'text-blue-600';
                     contentHtml += `<a href="${fileUrl}" target="_blank" rel="noopener noreferrer" class="block mt-2 underline truncate max-w-xs ${linkColor}" title="Download ${displayName}">📎 ${displayName}</a>`;
@@ -303,7 +311,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function checkWindowActive() {
         if (document.hasFocus()) {
-            // Window is active. If alerting, clear it after 3 seconds of sustained focus.
             if (isAlerting && !activeTimer) {
                 activeTimer = setTimeout(() => {
                     stopAlert();
@@ -311,7 +318,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 }, 3000);
             }
         } else {
-            // Window lost focus. Pause the clearing timer.
             if (activeTimer) {
                 clearTimeout(activeTimer);
                 activeTimer = null;
@@ -325,14 +331,19 @@ document.addEventListener('DOMContentLoaded', () => {
     // 8. Listen to SSE Broadcasts
     window.addEventListener('sse:new_message', (e) => {
         const msg = e.detail;
-        const involvedPhone = normalizePhone(msg.sender || msg.recipient);
+        
+        const normSender = normalizePhone(msg.sender);
+        const normRecipient = normalizePhone(msg.recipient);
+        
+        // Find who the other person is to update their specific thread
+        const involvedPhone = (normSender === SYSTEM_PHONE || !normSender) ? normRecipient : normSender;
 
         if (activePhone === involvedPhone) {
             appendMessageBubble(msg);
         }
 
-        // Trigger alert for inbound messages
-        if (msg.sender !== null) {
+        // Trigger alert for inbound messages (if sender is NOT us)
+        if (normSender && normSender !== SYSTEM_PHONE) {
             startAlert();
             checkWindowActive();
         }
