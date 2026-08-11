@@ -41,8 +41,9 @@ async def handle_inbound(request: Request, db: Session = Depends(get_db)):
 
     await dump_raw_webhook(payload, db)
 
-    # Some webhooks wrap the payload in 'data' or 'message'
-    msg_data = payload.get("message", payload.get("data", payload))
+    # FIX: Some webhooks wrap the payload in 'payload', 'data' or 'message'. 
+    # Check for 'payload' first based on the Android gateway format.
+    msg_data = payload.get("payload", payload.get("message", payload.get("data", payload)))
     action = payload.get("action", payload.get("event", msg_data.get("type", "")))
 
     if action == "mms:received":
@@ -147,7 +148,8 @@ async def handle_status(request: Request, db: Session = Depends(get_db)):
 
     await dump_raw_webhook(payload, db)
 
-    msg_data = payload.get("message", payload.get("data", payload))
+    # FIX: Apply the same payload wrapper check to status updates
+    msg_data = payload.get("payload", payload.get("message", payload.get("data", payload)))
     action = payload.get("action", payload.get("event", msg_data.get("type", "")))
     message_id = str(msg_data.get("messageId", msg_data.get("id", "")))
 
