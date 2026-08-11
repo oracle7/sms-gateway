@@ -17,6 +17,7 @@ router = APIRouter()
 
 MEDIA_DIR = "static/media"
 os.makedirs(MEDIA_DIR, exist_ok=True)
+DEBUG_LOG_FILE = "webhook_debug.jsonl"
 
 async def dump_raw_webhook(payload: dict, db: Session):
     """Failsafe: Dumps raw incoming webhooks to the database."""
@@ -25,7 +26,7 @@ async def dump_raw_webhook(payload: dict, db: Session):
         db.add(raw)
         db.commit()
     except Exception as e:
-        logger.error(f"Failed to dump raw webhook: {e}")
+        logger.error(f"Failed to dump raw webhook to DB: {e}")
         db.rollback()
 
 @router.post("/inbound")
@@ -38,6 +39,13 @@ async def handle_inbound(request: Request, db: Session = Depends(get_db)):
         payload = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    # Appending raw webhook to JSONL file for troubleshooting MMS
+    try:
+        with open(DEBUG_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload) + "\n")
+    except Exception as e:
+        logger.error(f"Failed to write to debug file: {e}")
 
     await dump_raw_webhook(payload, db)
 
@@ -145,6 +153,13 @@ async def handle_status(request: Request, db: Session = Depends(get_db)):
         payload = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    # Appending status raw webhook to JSONL file
+    try:
+        with open(DEBUG_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload) + "\n")
+    except Exception as e:
+        logger.error(f"Failed to write to debug file: {e}")
 
     await dump_raw_webhook(payload, db)
 

@@ -18,12 +18,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let activePhone = null;
     let contactsCache = {};
+    let unreadInActiveThread = false; // Tracks if a message arrived while looking away
 
     // Alerting Variables
     let isAlerting = false;
     let originalTitle = document.title;
     let alertInterval = null;
-    let activeTimer = null;
 
     // Normalization helper (E.164 Standard)
     function normalizePhone(phone, defaultCountryCode = '1') {
@@ -40,6 +40,9 @@ document.addEventListener('DOMContentLoaded', () => {
         await loadContactsMap();
         await loadThreads();
         setupEmojiPicker();
+
+        // Smooth transition for the flashy borders
+        document.body.style.transition = 'box-shadow 0.3s ease-in-out';
 
         const urlParams = new URLSearchParams(window.location.search);
         const phoneParam = urlParams.get('phone');
@@ -72,7 +75,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 const normSender = normalizePhone(msg.sender);
                 const normRecipient = normalizePhone(msg.recipient);
 
-                // Determine who the remote contact is by explicitly filtering out our own DID
                 let contactPhone = null;
                 if (normSender && normSender !== SYSTEM_PHONE) {
                     contactPhone = normSender;
@@ -80,7 +82,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     contactPhone = normRecipient;
                 }
 
-                // Skip orphaned or self-referencing messages entirely
                 if (!contactPhone) return;
 
                 if (!threads[contactPhone]) {
@@ -98,7 +99,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!threadList) return;
         threadList.innerHTML = '';
 
-        // Sort by most recent activity
         const sortedPhones = Object.keys(threads).sort((a, b) => {
             return new Date(threads[b].latestMsg.timestamp) - new Date(threads[a].latestMsg.timestamp);
         });
@@ -108,7 +108,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const name = contactsCache[phone] || phone;
             const previewText = data.latestMsg.body || 'Media message';
 
-            // Check for unread. Fallback logic: if sender is SYSTEM_PHONE or null, it's outbound.
             const msgSender = normalizePhone(data.latestMsg.sender);
             const isOutbound = msgSender === SYSTEM_PHONE || !msgSender;
             const isUnread = !isOutbound && (data.latestMsg.web_viewed === false || data.latestMsg.web_viewed === 0);
@@ -117,12 +116,11 @@ document.addEventListener('DOMContentLoaded', () => {
             if (activePhone === phone) {
                 containerClasses += `bg-blue-50 `;
             } else if (isUnread) {
-                containerClasses += `bg-red-50 hover:bg-red-100 `; // Red tint for unread
+                containerClasses += `bg-red-50 hover:bg-red-100 `;
             } else {
                 containerClasses += `bg-white hover:bg-gray-50 `;
             }
 
-            // Pulse indicator for unread threads
             const unreadIndicator = isUnread ? `<span class="absolute top-4 right-4 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse shadow-sm shadow-red-300" title="Unread"></span>` : '';
 
             const el = document.createElement('div');
@@ -137,17 +135,41 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // NEW: Function to mark active thread as read
+    function markActiveThreadRead() {
+        if (!activePhone) return;
+        fetch('/api/messages/mark-read/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone: activePhone })
+        }).then(() => {
+            unreadInActiveThread = false;
+            stopAlert(); // Clear flashing immediately
+            loadThreads(); // Refresh sidebar to remove red dot
+        }).catch(err => console.error('Failed to mark thread as read', err));
+    }
+
+    // NEW: Hover interaction on chat area clears the unread state
+    if (chatArea) {
+        const handleInteraction = () => {
+            if (unreadInActiveThread) {
+                markActiveThreadRead();
+            }
+        };
+        chatArea.addEventListener('mouseenter', handleInteraction);
+        chatArea.addEventListener('mousemove', handleInteraction); // Failsafe if mouse is already in the area
+    }
+
     // 4. Open a specific chat
     async function openThread(phone) {
         activePhone = normalizePhone(phone);
+        unreadInActiveThread = false;
 
-        // Update Right Sidebar Details
-        const name = contactsCache[activePhone] || activePhone;
-        if (rightContactName) rightContactName.textContent = name;
+        if (rightContactName) rightContactName.textContent = contactsCache[activePhone] || activePhone;
         if (rightContactPhone) rightContactPhone.textContent = activePhone;
-        if (contactInitial) contactInitial.textContent = name.charAt(0).toUpperCase();
+        if (contactInitial) contactInitial.textContent = (contactsCache[activePhone] || activePhone).charAt(0).toUpperCase();
 
-        loadThreads(); // Re-render to highlight active thread
+        markActiveThreadRead(); // Immediately mark as read on click
 
         try {
             const [inbound, outbound] = await Promise.all([
@@ -162,6 +184,25 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error('Failed to load chat history', err);
         }
     }
+
+    // NEW: Escape key logic to unload the thread
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            activePhone = null;
+            unreadInActiveThread = false;
+            stopAlert(); // Clear alerts just in case
+
+            if (rightContactName) rightContactName.textContent = 'Select a conversation';
+            if (rightContactPhone) rightContactPhone.textContent = '';
+            if (contactInitial) contactInitial.textContent = '?';
+
+            if (chatArea) {
+                chatArea.innerHTML = `<div class="flex h-full items-center justify-center text-gray-400">No messages yet.</div>`;
+            }
+
+            loadThreads(); // Re-render sidebar to remove the blue selection highlight
+        }
+    });
 
     function renderChatArea(messages) {
         if (!chatArea) return;
@@ -185,7 +226,6 @@ document.addEventListener('DOMContentLoaded', () => {
         bubble.dataset.internalId = msg.id;
         bubble.className = `max-w-md p-3 rounded-2xl mb-2 chat-bubble-animate ${isOutbound ? 'bg-blue-500 text-white self-end ml-auto rounded-br-sm' : 'bg-white border border-gray-200 text-gray-800 self-start mr-auto rounded-bl-sm shadow-sm'}`;
 
-        // Construct the content area (Text + Attachments or MMS absent fallback)
         let contentHtml = '';
         const hasText = msg.body && msg.body.trim() !== '';
         const hasMedia = msg.attachments && msg.attachments.length > 0;
@@ -218,7 +258,6 @@ document.addEventListener('DOMContentLoaded', () => {
             contentHtml = `<div class="text-sm italic ${isOutbound ? 'text-blue-200' : 'text-gray-500'}">[MMS absent]</div>`;
         }
 
-        // Delivery status formatting
         let statusHtml = '';
         if (isOutbound) {
             if (msg.is_failed) statusHtml = `<span class="text-red-300 text-xs ml-2" title="${msg.error_reason || 'Failed'}">❌</span>`;
@@ -227,7 +266,6 @@ document.addEventListener('DOMContentLoaded', () => {
             else statusHtml = `<span class="text-gray-300 text-xs ml-2" title="Sending">...</span>`;
         }
 
-        // Formatted timestamp including date and time
         const formattedDate = new Date(msg.timestamp).toLocaleString([], {
             month: 'short',
             day: 'numeric',
@@ -268,6 +306,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (res.ok) {
                     const newMsg = await res.json();
                     appendMessageBubble(newMsg);
+                    stopAlert(); // Stop flashing if they are actively typing/sending
                     loadThreads();
                 }
             } catch (err) {
@@ -293,13 +332,16 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // 7. Alerting Logic (3-second window active)
+    // 7. Alerting Logic with Flashy Borders (No auto-timeout, requires interaction)
     function startAlert() {
         if (isAlerting) return;
         isAlerting = true;
         let showDot = false;
+
         alertInterval = setInterval(() => {
             document.title = showDot ? "🔴 New Message! - Parla!" : originalTitle;
+            // Toggles a heavy red inset shadow across the entire page body
+            document.body.style.boxShadow = showDot ? 'inset 0 0 50px 20px rgba(255, 0, 0, 0.7)' : 'none';
             showDot = !showDot;
         }, 800);
     }
@@ -308,26 +350,8 @@ document.addEventListener('DOMContentLoaded', () => {
         isAlerting = false;
         clearInterval(alertInterval);
         document.title = originalTitle;
+        document.body.style.boxShadow = 'none'; // Clear the red border
     }
-
-    function checkWindowActive() {
-        if (document.hasFocus()) {
-            if (isAlerting && !activeTimer) {
-                activeTimer = setTimeout(() => {
-                    stopAlert();
-                    activeTimer = null;
-                }, 3000);
-            }
-        } else {
-            if (activeTimer) {
-                clearTimeout(activeTimer);
-                activeTimer = null;
-            }
-        }
-    }
-
-    window.addEventListener('focus', checkWindowActive);
-    window.addEventListener('blur', checkWindowActive);
 
     // 8. Listen to SSE Broadcasts
     window.addEventListener('sse:new_message', (e) => {
@@ -336,7 +360,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const normSender = normalizePhone(msg.sender);
         const normRecipient = normalizePhone(msg.recipient);
 
-        // Find who the other person is to update their specific thread
         let involvedPhone = null;
         if (normSender && normSender !== SYSTEM_PHONE) {
             involvedPhone = normSender;
@@ -346,12 +369,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (activePhone === involvedPhone && involvedPhone !== null) {
             appendMessageBubble(msg);
+
+            // Mark the active thread as having unread items so hover can trigger the read state
+            if (normSender && normSender !== SYSTEM_PHONE) {
+                unreadInActiveThread = true;
+            }
         }
 
-        // Trigger alert for inbound messages (if sender is NOT us)
+        // Trigger flashy alerts for all inbound messages, regardless of active thread
         if (normSender && normSender !== SYSTEM_PHONE) {
             startAlert();
-            checkWindowActive();
         }
 
         loadThreads();
@@ -359,7 +386,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.addEventListener('sse:status_update', (e) => {
         if (activePhone) {
-            openThread(activePhone);
+            // Check if thread is open, but do not clear unread state
+            fetch(`/api/messages/?sender=${encodeURIComponent(activePhone)}`).then(r => r.json()).then(inbound => {
+                fetch(`/api/messages/?recipient=${encodeURIComponent(activePhone)}`).then(r => r.json()).then(outbound => {
+                    const allMessages = [...inbound, ...outbound].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+                    renderChatArea(allMessages);
+                });
+            });
         }
     });
 
