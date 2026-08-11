@@ -339,7 +339,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let showDot = false;
 
         alertInterval = setInterval(() => {
-            document.title = showDot ? "🔴 New Message! - Parla!" : originalTitle;
+            document.title = showDot ? "🔴 New Message! - Messaging Center!" : originalTitle;
             // Toggles a heavy red inset shadow across the entire page body
             document.body.style.boxShadow = showDot ? 'inset 0 0 50px 20px rgba(255, 0, 0, 0.7)' : 'none';
             showDot = !showDot;
