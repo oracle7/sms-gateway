@@ -2,11 +2,15 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
+from pydantic import BaseModel
 
 from database import get_db
 import models, schemas
 
 router = APIRouter()
+
+class MarkReadPayload(BaseModel):
+    phone: str
 
 @router.get("/", response_model=List[schemas.MessageResponse])
 def get_messages(
@@ -36,3 +40,18 @@ def get_messages(
     query = query.order_by(models.Message.timestamp.desc()).limit(limit)
     
     return query.all()
+
+@router.post("/mark-read/")
+def mark_thread_as_read(payload: MarkReadPayload, db: Session = Depends(get_db)):
+    """
+    Marks all inbound messages from a specific sender as viewed in the web UI.
+    """
+    normalized_phone = payload.phone.strip()
+    
+    db.query(models.Message).filter(
+        models.Message.sender == normalized_phone,
+        models.Message.web_viewed == False
+    ).update({"web_viewed": True})
+    
+    db.commit()
+    return {"status": "success"}

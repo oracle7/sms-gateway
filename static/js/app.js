@@ -67,7 +67,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 3. Load and sort the left sidebar threads
     async function loadThreads() {
         try {
-            const res = await fetch('/api/messages/?limit=500');
+            const res = await fetch('/api/messages/?limit=500', { cache: 'no-store' });
             const messages = await res.json();
 
             const threads = {};
@@ -173,8 +173,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             const [inbound, outbound] = await Promise.all([
-                fetch(`/api/messages/?sender=${encodeURIComponent(activePhone)}`).then(r => r.json()),
-                fetch(`/api/messages/?recipient=${encodeURIComponent(activePhone)}`).then(r => r.json())
+                fetch(`/api/messages/?sender=${encodeURIComponent(activePhone)}`, { cache: 'no-store' }).then(r => r.json()),
+                fetch(`/api/messages/?recipient=${encodeURIComponent(activePhone)}`, { cache: 'no-store' }).then(r => r.json())
             ]);
 
             const allMessages = [...inbound, ...outbound].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
@@ -387,8 +387,8 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('sse:status_update', (e) => {
         if (activePhone) {
             // Check if thread is open, but do not clear unread state
-            fetch(`/api/messages/?sender=${encodeURIComponent(activePhone)}`).then(r => r.json()).then(inbound => {
-                fetch(`/api/messages/?recipient=${encodeURIComponent(activePhone)}`).then(r => r.json()).then(outbound => {
+            fetch(`/api/messages/?sender=${encodeURIComponent(activePhone)}`, { cache: 'no-store' }).then(r => r.json()).then(inbound => {
+                fetch(`/api/messages/?recipient=${encodeURIComponent(activePhone)}`, { cache: 'no-store' }).then(r => r.json()).then(outbound => {
                     const allMessages = [...inbound, ...outbound].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
                     renderChatArea(allMessages);
                 });
