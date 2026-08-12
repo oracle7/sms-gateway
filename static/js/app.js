@@ -35,6 +35,17 @@ document.addEventListener('DOMContentLoaded', () => {
         return `+${cleaned}`;
     }
 
+    // NEW: Safely parse backend timestamps as UTC so the browser converts them to local time
+    function parseUTCDate(timestamp) {
+        if (!timestamp) return new Date();
+        let ts = timestamp;
+        // If the backend returns a string without 'Z' or a timezone offset, append 'Z'
+        if (typeof ts === 'string' && !ts.endsWith('Z') && !ts.match(/[\+\-]\d{2}:\d{2}$/)) {
+            ts += 'Z';
+        }
+        return new Date(ts);
+    }
+
     // 1. Boot up
     async function init() {
         await loadContactsMap();
@@ -100,7 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
         threadList.innerHTML = '';
 
         const sortedPhones = Object.keys(threads).sort((a, b) => {
-            return new Date(threads[b].latestMsg.timestamp) - new Date(threads[a].latestMsg.timestamp);
+            return parseUTCDate(threads[b].latestMsg.timestamp) - parseUTCDate(threads[a].latestMsg.timestamp);
         });
 
         sortedPhones.forEach(phone => {
@@ -135,7 +146,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // NEW: Function to mark active thread as read
+    // Function to mark active thread as read
     function markActiveThreadRead() {
         if (!activePhone) return;
         fetch('/api/messages/mark-read/', {
@@ -149,7 +160,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }).catch(err => console.error('Failed to mark thread as read', err));
     }
 
-    // NEW: Hover interaction on chat area clears the unread state
+    // Hover interaction on chat area clears the unread state
     if (chatArea) {
         const handleInteraction = () => {
             if (unreadInActiveThread) {
@@ -177,7 +188,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 fetch(`/api/messages/?recipient=${encodeURIComponent(activePhone)}`, { cache: 'no-store' }).then(r => r.json())
             ]);
 
-            const allMessages = [...inbound, ...outbound].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+            const allMessages = [...inbound, ...outbound].sort((a, b) => parseUTCDate(a.timestamp) - parseUTCDate(b.timestamp));
             renderChatArea(allMessages);
 
         } catch (err) {
@@ -185,7 +196,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // NEW: Escape key logic to unload the thread
+    // Escape key logic to unload the thread
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             activePhone = null;
@@ -266,7 +277,7 @@ document.addEventListener('DOMContentLoaded', () => {
             else statusHtml = `<span class="text-gray-300 text-xs ml-2" title="Sending">...</span>`;
         }
 
-        const formattedDate = new Date(msg.timestamp).toLocaleString([], {
+        const formattedDate = parseUTCDate(msg.timestamp).toLocaleString([], {
             month: 'short',
             day: 'numeric',
             hour: '2-digit',
@@ -389,7 +400,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Check if thread is open, but do not clear unread state
             fetch(`/api/messages/?sender=${encodeURIComponent(activePhone)}`, { cache: 'no-store' }).then(r => r.json()).then(inbound => {
                 fetch(`/api/messages/?recipient=${encodeURIComponent(activePhone)}`, { cache: 'no-store' }).then(r => r.json()).then(outbound => {
-                    const allMessages = [...inbound, ...outbound].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+                    const allMessages = [...inbound, ...outbound].sort((a, b) => parseUTCDate(a.timestamp) - parseUTCDate(b.timestamp));
                     renderChatArea(allMessages);
                 });
             });
