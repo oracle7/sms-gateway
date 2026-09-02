@@ -13,17 +13,6 @@
     </div>
 
     <!-- Emoji Picker -->
-    <div class="p-4 flex-1 overflow-y-auto bg-gray-50">
-        <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Quick Emojis</p>
-        <div class="grid grid-cols-4 gap-2 text-2xl" id="emoji-picker">
-            <button class="hover:bg-gray-200 p-2 rounded transition-colors" type="button">👍</button>
-            <button class="hover:bg-gray-200 p-2 rounded transition-colors" type="button">❤️</button>
-            <button class="hover:bg-gray-200 p-2 rounded transition-colors" type="button">😂</button>
-            <button class="hover:bg-gray-200 p-2 rounded transition-colors" type="button">😮</button>
-            <button class="hover:bg-gray-200 p-2 rounded transition-colors" type="button">😢</button>
-            <button class="hover:bg-gray-200 p-2 rounded transition-colors" type="button">🙏</button>
-            <button class="hover:bg-gray-200 p-2 rounded transition-colors" type="button">✅</button>
-            <button class="hover:bg-gray-200 p-2 rounded transition-colors" type="button">❌</button>
-        </div>
-    </div>
+    <!-- Full searchable WhatsApp-style picker dropdown -->
+    <emoji-picker id="emoji-picker" class="hidden absolute bottom-16 right-4 z-50 shadow-2xl rounded-2xl border border-gray-200 light"></emoji-picker>
 </aside>

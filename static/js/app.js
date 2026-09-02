@@ -3,7 +3,6 @@
  * Controls the main messaging interface (thread list, chat area, and sidebars).
  */
 document.addEventListener('DOMContentLoaded', () => {
-    // Define the system's phone number here to determine message direction
     const SYSTEM_PHONE = '+19296141937';
 
     const threadList = document.getElementById('thread-list');
@@ -11,21 +10,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const messageForm = document.getElementById('message-form');
     const messageInput = document.getElementById('message-input');
 
-    // Right sidebar elements
     const rightContactName = document.getElementById('right-contact-name');
     const rightContactPhone = document.getElementById('right-contact-phone');
     const contactInitial = document.getElementById('contact-initial');
 
     let activePhone = null;
     let contactsCache = {};
-    let unreadInActiveThread = false; // Tracks if a message arrived while looking away
+    let unreadInActiveThread = false; 
 
-    // Alerting Variables
     let isAlerting = false;
     let originalTitle = document.title;
     let alertInterval = null;
 
-    // Normalization helper (E.164 Standard)
     function normalizePhone(phone, defaultCountryCode = '1') {
         if (!phone) return '';
         let cleaned = phone.trim().replace(/[^\d+]/g, '');
@@ -35,24 +31,20 @@ document.addEventListener('DOMContentLoaded', () => {
         return `+${cleaned}`;
     }
 
-    // NEW: Safely parse backend timestamps as UTC so the browser converts them to local time
     function parseUTCDate(timestamp) {
         if (!timestamp) return new Date();
         let ts = timestamp;
-        // If the backend returns a string without 'Z' or a timezone offset, append 'Z'
         if (typeof ts === 'string' && !ts.endsWith('Z') && !ts.match(/[\+\-]\d{2}:\d{2}$/)) {
             ts += 'Z';
         }
         return new Date(ts);
     }
 
-    // 1. Boot up
     async function init() {
         await loadContactsMap();
         await loadThreads();
         setupEmojiPicker();
 
-        // Smooth transition for the flashy borders
         document.body.style.transition = 'box-shadow 0.3s ease-in-out';
 
         const urlParams = new URLSearchParams(window.location.search);
@@ -62,7 +54,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // 2. Fetch contacts for name resolution
     async function loadContactsMap() {
         try {
             const res = await fetch('/api/contacts/');
@@ -75,7 +66,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // 3. Load and sort the left sidebar threads
     async function loadThreads() {
         try {
             const res = await fetch('/api/messages/?limit=500', { cache: 'no-store' });
@@ -146,7 +136,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Function to mark active thread as read
     function markActiveThreadRead() {
         if (!activePhone) return;
         fetch('/api/messages/mark-read/', {
@@ -155,12 +144,11 @@ document.addEventListener('DOMContentLoaded', () => {
             body: JSON.stringify({ phone: activePhone })
         }).then(() => {
             unreadInActiveThread = false;
-            stopAlert(); // Clear flashing immediately
-            loadThreads(); // Refresh sidebar to remove red dot
+            stopAlert(); 
+            loadThreads(); 
         }).catch(err => console.error('Failed to mark thread as read', err));
     }
 
-    // Hover interaction on chat area clears the unread state
     if (chatArea) {
         const handleInteraction = () => {
             if (unreadInActiveThread) {
@@ -168,10 +156,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
         chatArea.addEventListener('mouseenter', handleInteraction);
-        chatArea.addEventListener('mousemove', handleInteraction); // Failsafe if mouse is already in the area
+        chatArea.addEventListener('mousemove', handleInteraction); 
     }
 
-    // 4. Open a specific chat
     async function openThread(phone) {
         activePhone = normalizePhone(phone);
         unreadInActiveThread = false;
@@ -180,7 +167,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (rightContactPhone) rightContactPhone.textContent = activePhone;
         if (contactInitial) contactInitial.textContent = (contactsCache[activePhone] || activePhone).charAt(0).toUpperCase();
 
-        markActiveThreadRead(); // Immediately mark as read on click
+        markActiveThreadRead(); 
 
         try {
             const [inbound, outbound] = await Promise.all([
@@ -196,12 +183,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Escape key logic to unload the thread
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             activePhone = null;
             unreadInActiveThread = false;
-            stopAlert(); // Clear alerts just in case
+            stopAlert(); 
 
             if (rightContactName) rightContactName.textContent = 'Select a conversation';
             if (rightContactPhone) rightContactPhone.textContent = '';
@@ -211,7 +197,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 chatArea.innerHTML = `<div class="flex h-full items-center justify-center text-gray-400">No messages yet.</div>`;
             }
 
-            loadThreads(); // Re-render sidebar to remove the blue selection highlight
+            loadThreads(); 
         }
     });
 
@@ -235,14 +221,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const bubble = document.createElement('div');
         bubble.dataset.internalId = msg.id;
-        bubble.className = `max-w-md p-3 rounded-2xl mb-2 chat-bubble-animate ${isOutbound ? 'bg-blue-500 text-white self-end ml-auto rounded-br-sm' : 'bg-white border border-gray-200 text-gray-800 self-start mr-auto rounded-bl-sm shadow-sm'}`;
+        
+        // Notice the 'group relative' classes added here for the hover effect
+        bubble.className = `group relative max-w-md p-3 rounded-2xl mb-2 chat-bubble-animate ${isOutbound ? 'bg-blue-500 text-white self-end ml-auto rounded-br-sm' : 'bg-white border border-gray-200 text-gray-800 self-start mr-auto rounded-bl-sm shadow-sm'}`;
 
         let contentHtml = '';
         const hasText = msg.body && msg.body.trim() !== '';
         const hasMedia = msg.attachments && msg.attachments.length > 0;
 
         if (hasText) {
-            contentHtml += `<div class="text-sm leading-relaxed">${msg.body}</div>`;
+            // whitespace-pre-wrap ensures [SHIFT]+[ENTER] linebreaks render correctly
+            contentHtml += `<div class="text-sm leading-relaxed pr-6 whitespace-pre-wrap">${msg.body}</div>`;
         }
 
         if (hasMedia) {
@@ -292,12 +281,44 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
         `;
 
+        // Inject the Copy Button if there is text to copy
+        if (hasText) {
+            const copyBtn = document.createElement('button');
+            copyBtn.className = `opacity-0 group-hover:opacity-100 transition-opacity absolute top-2 right-2 p-1.5 rounded-md shadow-sm z-10 flex items-center justify-center ${isOutbound ? 'bg-blue-600 text-blue-100 hover:bg-blue-700 hover:text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-700'}`;
+            copyBtn.title = "Copy text";
+            copyBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>`;
+            copyBtn.onclick = () => {
+                navigator.clipboard.writeText(msg.body).then(() => {
+                    const origHtml = copyBtn.innerHTML;
+                    copyBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>`;
+                    setTimeout(() => copyBtn.innerHTML = origHtml, 2000);
+                }).catch(err => console.error('Failed to copy text', err));
+            };
+            bubble.appendChild(copyBtn);
+        }
+
         chatArea.appendChild(bubble);
         chatArea.scrollTop = chatArea.scrollHeight;
     }
 
-    // 5. Send a new message
-    if (messageForm) {
+    if (messageForm && messageInput) {
+        // Handle Auto-resizing
+        messageInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = (this.scrollHeight) + 'px';
+            if (this.value === '') this.style.height = '44px';
+        });
+
+        // Handle Enter (Send) vs Shift+Enter (New Line)
+        messageInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault(); 
+                if (messageInput.value.trim() !== '') {
+                    messageForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+                }
+            }
+        });
+
         messageForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             if (!activePhone) return alert("Select a thread first!");
@@ -306,6 +327,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!body) return;
 
             messageInput.value = '';
+            messageInput.style.height = '44px'; // Reset height after sending
 
             try {
                 const res = await fetch('/api/messages/', {
@@ -317,7 +339,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (res.ok) {
                     const newMsg = await res.json();
                     appendMessageBubble(newMsg);
-                    stopAlert(); // Stop flashing if they are actively typing/sending
+                    stopAlert(); 
                     loadThreads();
                 }
             } catch (err) {
@@ -326,24 +348,44 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // 6. Emoji Picker Logic
     function setupEmojiPicker() {
-        document.querySelectorAll('#emoji-picker button').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const emoji = e.target.textContent;
-                if (messageInput) {
-                    const start = messageInput.selectionStart;
-                    const end = messageInput.selectionEnd;
-                    const text = messageInput.value;
-                    messageInput.value = text.slice(0, start) + emoji + text.slice(end);
-                    messageInput.focus();
-                    messageInput.selectionStart = messageInput.selectionEnd = start + emoji.length;
-                }
+        const picker = document.querySelector('emoji-picker');
+        const toggleBtn = document.getElementById('emoji-toggle-btn'); // Your emoji trigger button
+
+        if (!picker || !messageInput) return;
+
+        // Toggle picker visibility on button click (if you have a toggle button)
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                picker.classList.toggle('hidden');
             });
+        }
+
+        // Handle selecting an emoji from the picker
+        picker.addEventListener('emoji-click', event => {
+            const emoji = event.detail.unicode;
+            const start = messageInput.selectionStart;
+            const end = messageInput.selectionEnd;
+            const text = messageInput.value;
+
+            // Insert emoji at cursor position
+            messageInput.value = text.slice(0, start) + emoji + text.slice(end);
+            messageInput.focus();
+            messageInput.selectionStart = messageInput.selectionEnd = start + emoji.length;
+
+            // Trigger input event to auto-resize the compose box
+            messageInput.dispatchEvent(new Event('input'));
+        });
+
+        // Close picker when clicking outside of it
+        document.addEventListener('click', (e) => {
+            if (toggleBtn && !picker.contains(e.target) && !toggleBtn.contains(e.target)) {
+                picker.classList.add('hidden');
+            }
         });
     }
 
-    // 7. Alerting Logic with Flashy Borders (No auto-timeout, requires interaction)
     function startAlert() {
         if (isAlerting) return;
         isAlerting = true;
@@ -351,7 +393,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         alertInterval = setInterval(() => {
             document.title = showDot ? "🔴 New Message! - Messaging Center!" : originalTitle;
-            // Toggles a heavy red inset shadow across the entire page body
             document.body.style.boxShadow = showDot ? 'inset 0 0 50px 20px rgba(255, 0, 0, 0.7)' : 'none';
             showDot = !showDot;
         }, 800);
@@ -361,10 +402,9 @@ document.addEventListener('DOMContentLoaded', () => {
         isAlerting = false;
         clearInterval(alertInterval);
         document.title = originalTitle;
-        document.body.style.boxShadow = 'none'; // Clear the red border
+        document.body.style.boxShadow = 'none'; 
     }
 
-    // 8. Listen to SSE Broadcasts
     window.addEventListener('sse:new_message', (e) => {
         const msg = e.detail;
 
@@ -381,13 +421,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (activePhone === involvedPhone && involvedPhone !== null) {
             appendMessageBubble(msg);
 
-            // Mark the active thread as having unread items so hover can trigger the read state
             if (normSender && normSender !== SYSTEM_PHONE) {
                 unreadInActiveThread = true;
             }
         }
 
-        // Trigger flashy alerts for all inbound messages, regardless of active thread
         if (normSender && normSender !== SYSTEM_PHONE) {
             startAlert();
         }
@@ -397,7 +435,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.addEventListener('sse:status_update', (e) => {
         if (activePhone) {
-            // Check if thread is open, but do not clear unread state
             fetch(`/api/messages/?sender=${encodeURIComponent(activePhone)}`, { cache: 'no-store' }).then(r => r.json()).then(inbound => {
                 fetch(`/api/messages/?recipient=${encodeURIComponent(activePhone)}`, { cache: 'no-store' }).then(r => r.json()).then(outbound => {
                     const allMessages = [...inbound, ...outbound].sort((a, b) => parseUTCDate(a.timestamp) - parseUTCDate(b.timestamp));
