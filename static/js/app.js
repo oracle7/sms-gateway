@@ -13,10 +13,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const rightContactName = document.getElementById('right-contact-name');
     const rightContactPhone = document.getElementById('right-contact-phone');
     const contactInitial = document.getElementById('contact-initial');
+    const sidebarEmojiContainer = document.getElementById('sidebar-emoji-container');
 
     let activePhone = null;
     let contactsCache = {};
-    let unreadInActiveThread = false; 
+    let unreadInActiveThread = false;
 
     let isAlerting = false;
     let originalTitle = document.title;
@@ -144,8 +145,8 @@ document.addEventListener('DOMContentLoaded', () => {
             body: JSON.stringify({ phone: activePhone })
         }).then(() => {
             unreadInActiveThread = false;
-            stopAlert(); 
-            loadThreads(); 
+            stopAlert();
+            loadThreads();
         }).catch(err => console.error('Failed to mark thread as read', err));
     }
 
@@ -156,18 +157,22 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
         chatArea.addEventListener('mouseenter', handleInteraction);
-        chatArea.addEventListener('mousemove', handleInteraction); 
+        chatArea.addEventListener('mousemove', handleInteraction);
     }
 
     async function openThread(phone) {
         activePhone = normalizePhone(phone);
         unreadInActiveThread = false;
 
+        // Show right sidebar info
         if (rightContactName) rightContactName.textContent = contactsCache[activePhone] || activePhone;
         if (rightContactPhone) rightContactPhone.textContent = activePhone;
         if (contactInitial) contactInitial.textContent = (contactsCache[activePhone] || activePhone).charAt(0).toUpperCase();
 
-        markActiveThreadRead(); 
+        // Show the emoji picker when a thread is active
+        if (sidebarEmojiContainer) sidebarEmojiContainer.classList.remove('hidden');
+
+        markActiveThreadRead();
 
         try {
             const [inbound, outbound] = await Promise.all([
@@ -187,17 +192,20 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.key === 'Escape') {
             activePhone = null;
             unreadInActiveThread = false;
-            stopAlert(); 
+            stopAlert();
 
             if (rightContactName) rightContactName.textContent = 'Select a conversation';
             if (rightContactPhone) rightContactPhone.textContent = '';
             if (contactInitial) contactInitial.textContent = '?';
 
+            // Hide the emoji picker when thread is closed
+            if (sidebarEmojiContainer) sidebarEmojiContainer.classList.add('hidden');
+
             if (chatArea) {
                 chatArea.innerHTML = `<div class="flex h-full items-center justify-center text-gray-400">No messages yet.</div>`;
             }
 
-            loadThreads(); 
+            loadThreads();
         }
     });
 
@@ -221,8 +229,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const bubble = document.createElement('div');
         bubble.dataset.internalId = msg.id;
-        
-        // Notice the 'group relative' classes added here for the hover effect
+
         bubble.className = `group relative max-w-md p-3 rounded-2xl mb-2 chat-bubble-animate ${isOutbound ? 'bg-blue-500 text-white self-end ml-auto rounded-br-sm' : 'bg-white border border-gray-200 text-gray-800 self-start mr-auto rounded-bl-sm shadow-sm'}`;
 
         let contentHtml = '';
@@ -230,7 +237,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const hasMedia = msg.attachments && msg.attachments.length > 0;
 
         if (hasText) {
-            // whitespace-pre-wrap ensures [SHIFT]+[ENTER] linebreaks render correctly
             contentHtml += `<div class="text-sm leading-relaxed pr-6 whitespace-pre-wrap">${msg.body}</div>`;
         }
 
@@ -281,7 +287,6 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
         `;
 
-        // Inject the Copy Button if there is text to copy
         if (hasText) {
             const copyBtn = document.createElement('button');
             copyBtn.className = `opacity-0 group-hover:opacity-100 transition-opacity absolute top-2 right-2 p-1.5 rounded-md shadow-sm z-10 flex items-center justify-center ${isOutbound ? 'bg-blue-600 text-blue-100 hover:bg-blue-700 hover:text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-700'}`;
@@ -302,17 +307,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (messageForm && messageInput) {
-        // Handle Auto-resizing
-        messageInput.addEventListener('input', function() {
+        messageInput.addEventListener('input', function () {
             this.style.height = 'auto';
             this.style.height = (this.scrollHeight) + 'px';
             if (this.value === '') this.style.height = '44px';
         });
 
-        // Handle Enter (Send) vs Shift+Enter (New Line)
         messageInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault(); 
+                e.preventDefault();
                 if (messageInput.value.trim() !== '') {
                     messageForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
                 }
@@ -327,7 +330,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!body) return;
 
             messageInput.value = '';
-            messageInput.style.height = '44px'; // Reset height after sending
+            messageInput.style.height = '44px';
 
             try {
                 const res = await fetch('/api/messages/', {
@@ -339,7 +342,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (res.ok) {
                     const newMsg = await res.json();
                     appendMessageBubble(newMsg);
-                    stopAlert(); 
+                    stopAlert();
                     loadThreads();
                 }
             } catch (err) {
@@ -348,41 +351,22 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // NEW: Clean, simple listener for the full emoji picker
     function setupEmojiPicker() {
         const picker = document.querySelector('emoji-picker');
-        const toggleBtn = document.getElementById('emoji-toggle-btn'); // Your emoji trigger button
-
         if (!picker || !messageInput) return;
 
-        // Toggle picker visibility on button click (if you have a toggle button)
-        if (toggleBtn) {
-            toggleBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                picker.classList.toggle('hidden');
-            });
-        }
-
-        // Handle selecting an emoji from the picker
         picker.addEventListener('emoji-click', event => {
             const emoji = event.detail.unicode;
             const start = messageInput.selectionStart;
             const end = messageInput.selectionEnd;
             const text = messageInput.value;
 
-            // Insert emoji at cursor position
             messageInput.value = text.slice(0, start) + emoji + text.slice(end);
             messageInput.focus();
             messageInput.selectionStart = messageInput.selectionEnd = start + emoji.length;
 
-            // Trigger input event to auto-resize the compose box
-            messageInput.dispatchEvent(new Event('input'));
-        });
-
-        // Close picker when clicking outside of it
-        document.addEventListener('click', (e) => {
-            if (toggleBtn && !picker.contains(e.target) && !toggleBtn.contains(e.target)) {
-                picker.classList.add('hidden');
-            }
+            messageInput.dispatchEvent(new Event('input')); // Auto-resize
         });
     }
 
@@ -402,7 +386,7 @@ document.addEventListener('DOMContentLoaded', () => {
         isAlerting = false;
         clearInterval(alertInterval);
         document.title = originalTitle;
-        document.body.style.boxShadow = 'none'; 
+        document.body.style.boxShadow = 'none';
     }
 
     window.addEventListener('sse:new_message', (e) => {
