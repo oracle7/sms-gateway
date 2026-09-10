@@ -1,6 +1,6 @@
 ﻿/**
  * app.js
- * Controls the main messaging interface (thread list, chat area, and sidebars).
+ * Controls the main messaging interface (thread list and chat area).
  */
 document.addEventListener('DOMContentLoaded', () => {
     const SYSTEM_PHONE = '+19296141937';
@@ -9,11 +9,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const chatArea = document.getElementById('chat-area');
     const messageForm = document.getElementById('message-form');
     const messageInput = document.getElementById('message-input');
-
-    const rightContactName = document.getElementById('right-contact-name');
-    const rightContactPhone = document.getElementById('right-contact-phone');
-    const contactInitial = document.getElementById('contact-initial');
-    const sidebarEmojiContainer = document.getElementById('sidebar-emoji-container');
 
     let activePhone = null;
     let contactsCache = {};
@@ -164,14 +159,6 @@ document.addEventListener('DOMContentLoaded', () => {
         activePhone = normalizePhone(phone);
         unreadInActiveThread = false;
 
-        // Show right sidebar info
-        if (rightContactName) rightContactName.textContent = contactsCache[activePhone] || activePhone;
-        if (rightContactPhone) rightContactPhone.textContent = activePhone;
-        if (contactInitial) contactInitial.textContent = (contactsCache[activePhone] || activePhone).charAt(0).toUpperCase();
-
-        // Show the emoji picker when a thread is active
-        if (sidebarEmojiContainer) sidebarEmojiContainer.classList.remove('hidden');
-
         markActiveThreadRead();
 
         try {
@@ -194,12 +181,9 @@ document.addEventListener('DOMContentLoaded', () => {
             unreadInActiveThread = false;
             stopAlert();
 
-            if (rightContactName) rightContactName.textContent = 'Select a conversation';
-            if (rightContactPhone) rightContactPhone.textContent = '';
-            if (contactInitial) contactInitial.textContent = '?';
-
-            // Hide the emoji picker when thread is closed
-            if (sidebarEmojiContainer) sidebarEmojiContainer.classList.add('hidden');
+            // Also hide picker if escape is pressed
+            const picker = document.querySelector('emoji-picker');
+            if (picker) picker.classList.add('hidden');
 
             if (chatArea) {
                 chatArea.innerHTML = `<div class="flex h-full items-center justify-center text-gray-400">No messages yet.</div>`;
@@ -351,11 +335,20 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // NEW: Clean, simple listener for the full emoji picker
     function setupEmojiPicker() {
         const picker = document.querySelector('emoji-picker');
+        const toggleBtn = document.getElementById('emoji-toggle-btn');
         if (!picker || !messageInput) return;
 
+        // Toggle the picker when clicking the smiley button
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                picker.classList.toggle('hidden');
+            });
+        }
+
+        // Insert emoji and auto-resize
         picker.addEventListener('emoji-click', event => {
             const emoji = event.detail.unicode;
             const start = messageInput.selectionStart;
@@ -366,7 +359,14 @@ document.addEventListener('DOMContentLoaded', () => {
             messageInput.focus();
             messageInput.selectionStart = messageInput.selectionEnd = start + emoji.length;
 
-            messageInput.dispatchEvent(new Event('input')); // Auto-resize
+            messageInput.dispatchEvent(new Event('input'));
+        });
+
+        // Hide the picker when clicking outside of it
+        document.addEventListener('click', (e) => {
+            if (toggleBtn && !picker.contains(e.target) && !toggleBtn.contains(e.target)) {
+                picker.classList.add('hidden');
+            }
         });
     }
 
