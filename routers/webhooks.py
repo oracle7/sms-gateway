@@ -164,7 +164,14 @@ async def handle_inbound(request: Request, db: Session = Depends(get_db)):
         "sender": db_msg.sender,
         "recipient": db_msg.recipient,
         "body": db_msg.body,
+        "timestamp": db_msg.timestamp.isoformat() if db_msg.timestamp else None,
         "is_inbound": True,
+        "is_sent": db_msg.is_sent if hasattr(db_msg, 'is_sent') else False,
+        "is_delivered": db_msg.is_delivered if hasattr(db_msg, 'is_delivered') else False,
+        "is_failed": db_msg.is_failed if hasattr(db_msg, 'is_failed') else False,
+        "is_cancelled": db_msg.is_cancelled if hasattr(db_msg, 'is_cancelled') else False,
+        "error_reason": db_msg.error_reason if hasattr(db_msg, 'error_reason') else None,
+        "web_viewed": db_msg.web_viewed if hasattr(db_msg, 'web_viewed') else False,
         "attachments": processed_attachments
     }
     await broadcaster.publish("new_message", broadcast_data)
