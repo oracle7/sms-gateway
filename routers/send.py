@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from database import get_db
 import models, schemas
 from config import settings
+from services.broadcaster import broadcaster
 
 logger = logging.getLogger("uvicorn.error")
 router = APIRouter()
@@ -77,5 +78,32 @@ async def send_message(payload: schemas.MessageSend, db: Session = Depends(get_d
     db.add(db_msg)
     db.commit()
     db.refresh(db_msg)
-    
+
+    # ---------------------------------------------------------
+    # Broadcast to other connected web UIs so they see this
+    # outbound message in real time (fixes the local-only
+    # append that other clients don't receive).
+    # ---------------------------------------------------------
+    broadcast_data = {
+        "id": db_msg.id,
+        "message_id": db_msg.message_id,
+        "sender": db_msg.sender,
+        "recipient": db_msg.recipient,
+        "body": db_msg.body,
+        "is_inbound": False,
+        "timestamp": db_msg.timestamp.isoformat(),
+        "is_sent": db_msg.is_sent,
+        "is_delivered": db_msg.is_delivered,
+        "is_failed": db_msg.is_failed,
+        "is_cancelled": db_msg.is_cancelled,
+        "web_viewed": db_msg.web_viewed,
+        "is_read": db_msg.is_read,
+        "error_reason": db_msg.error_reason,
+        "attachments": [
+            {"filename": a.filename, "content_type": a.content_type}
+            for a in db_msg.attachments
+        ]
+    }
+    await broadcaster.publish("new_message", broadcast_data)
+
     return db_msg

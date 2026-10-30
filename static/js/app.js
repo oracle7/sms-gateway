@@ -403,7 +403,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (activePhone === involvedPhone && involvedPhone !== null) {
-            appendMessageBubble(msg);
+            // Guard against double-append: the window that sent the message
+            // already rendered it in the submit handler (app.js / the
+            // /api/messages/ POST response). Skip if this id is present.
+            if (!chatArea.querySelector(`[data-internal-id="${msg.id}"]`)) {
+                appendMessageBubble(msg);
+            }
 
             if (normSender && normSender !== SYSTEM_PHONE) {
                 unreadInActiveThread = true;
