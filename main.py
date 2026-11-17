@@ -6,6 +6,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 
 # Import database initialization
+from config import settings
 from database import engine, Base
 import models
 
@@ -35,6 +36,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def add_no_cache_headers(request: Request, call_next):
+    """Ensure browsers validate HTML pages and JS/CSS assets instead of serving stale versions."""
+    response = await call_next(request)
+    path = request.url.path
+    if path in ("/", "/contacts") or path.startswith("/static/js/") or path.startswith("/static/css/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 # Mount static files (CSS, JS, and user media attachments)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -53,9 +65,9 @@ app.include_router(health.router, prefix="/health", tags=["Health"])
 @app.get("/")
 async def index_page(request: Request):
     """Serves the main messaging/chat interface."""
-    return templates.TemplateResponse(request=request, name="index.html")
+    return templates.TemplateResponse(request=request, name="index.html", context={"sms_did": settings.SMS_DID})
 
 @app.get("/contacts")
 async def contacts_page(request: Request):
     """Serves the contact management interface."""
-    return templates.TemplateResponse(request=request, name="contacts.html")
+    return templates.TemplateResponse(request=request, name="contacts.html", context={"sms_did": settings.SMS_DID})

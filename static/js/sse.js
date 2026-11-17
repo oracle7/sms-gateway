@@ -5,18 +5,36 @@
 document.addEventListener('DOMContentLoaded', () => {
     const SSE_URL = '/events';
     let evtSource = null;
+    let hasConnectedOnce = false;
+    let lastActivityTime = Date.now();
 
     function initSSE() {
+        if (evtSource) {
+            evtSource.close();
+            evtSource = null;
+        }
+
+        lastActivityTime = Date.now();
         console.log('[SSE] Initializing connection...');
         evtSource = new EventSource(SSE_URL);
 
         evtSource.onopen = () => {
+            lastActivityTime = Date.now();
             console.log('[SSE] Connected to Event Stream.');
+            window.dispatchEvent(new CustomEvent('sse:reconnected', {
+                detail: { isReconnect: hasConnectedOnce }
+            }));
+            hasConnectedOnce = true;
         };
 
         evtSource.onmessage = (event) => {
+            lastActivityTime = Date.now();
             try {
                 const payload = JSON.parse(event.data);
+                if (payload.type === 'ping') {
+                    return;
+                }
+
                 console.log(`[SSE] Event Received: ${payload.type}`, payload.data);
 
                 if (payload.type === 'new_message') {
@@ -24,6 +42,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 else if (payload.type === 'status_update') {
                     window.dispatchEvent(new CustomEvent('sse:status_update', { detail: payload.data }));
+                }
+                else if (payload.type === 'thread_read') {
+                    window.dispatchEvent(new CustomEvent('sse:thread_read', { detail: payload.data }));
                 }
                 // --- NEW HEALTH UPDATE HANDLER ---
                 else if (payload.type === 'health_update') {
@@ -78,6 +99,29 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
     }
+
+    // Watchdog: detect silent half-open TCP drops (e.g., across IPsec VPN)
+    // Server sends a ping every 10s, so >25s of silence indicates a dead stream.
+    setInterval(() => {
+        if (Date.now() - lastActivityTime > 25000) {
+            console.warn('[SSE] Heartbeat timeout detected. Reconnecting...');
+            initSSE();
+        }
+    }, 5000);
+
+    window.addEventListener('online', () => {
+        console.log('[SSE] Network online. Reconnecting...');
+        initSSE();
+    });
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+            if (!evtSource || evtSource.readyState === EventSource.CLOSED || (Date.now() - lastActivityTime > 20000)) {
+                console.log('[SSE] Tab became visible with stale/closed stream. Reconnecting...');
+                initSSE();
+            }
+        }
+    });
 
     initSSE();
 });

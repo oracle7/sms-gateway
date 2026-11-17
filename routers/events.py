@@ -4,6 +4,7 @@ from services.broadcaster import broadcaster
 
 router = APIRouter()
 
+@router.get("")
 @router.get("/")
 async def sse_endpoint(request: Request):
     """
@@ -12,6 +13,11 @@ async def sse_endpoint(request: Request):
     to receive real-time webhook updates without polling.
     """
     return StreamingResponse(
-        broadcaster.connect(), 
-        media_type="text/event-stream"
+        broadcaster.connect(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
     )

@@ -3,21 +3,6 @@
  * Controls the main messaging interface (thread list and chat area).
  */
 document.addEventListener('DOMContentLoaded', () => {
-    const SYSTEM_PHONE = '+19296141937';
-
-    const threadList = document.getElementById('thread-list');
-    const chatArea = document.getElementById('chat-area');
-    const messageForm = document.getElementById('message-form');
-    const messageInput = document.getElementById('message-input');
-
-    let activePhone = null;
-    let contactsCache = {};
-    let unreadInActiveThread = false;
-
-    let isAlerting = false;
-    let originalTitle = document.title;
-    let alertInterval = null;
-
     function normalizePhone(phone, defaultCountryCode = '1') {
         if (!phone) return '';
         let cleaned = phone.trim().replace(/[^\d+]/g, '');
@@ -25,6 +10,30 @@ document.addEventListener('DOMContentLoaded', () => {
         if (cleaned.length === 10) return `+${defaultCountryCode}${cleaned}`;
         if (cleaned.length === 11 && cleaned.startsWith(defaultCountryCode)) return `+${cleaned}`;
         return `+${cleaned}`;
+    }
+
+    const SYSTEM_PHONE = normalizePhone(window.SYSTEM_PHONE || '+19296141937');
+
+    const threadList = document.getElementById('thread-list');
+    const chatArea = document.getElementById('chat-area');
+    const messageForm = document.getElementById('message-form');
+    const messageInput = document.getElementById('message-input');
+
+    let activePhone = null;
+    let userClosedThread = false;
+    let contactsCache = {};
+    let unreadInActiveThread = false;
+
+    let isAlerting = false;
+    let originalTitle = document.title;
+    let alertInterval = null;
+
+    function scrollToBottom() {
+        if (!chatArea) return;
+        chatArea.scrollTop = chatArea.scrollHeight;
+        requestAnimationFrame(() => {
+            chatArea.scrollTop = chatArea.scrollHeight;
+        });
     }
 
     function parseUTCDate(timestamp) {
@@ -38,7 +47,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function init() {
         await loadContactsMap();
-        await loadThreads();
+        const sortedPhones = await loadThreads();
         setupEmojiPicker();
 
         document.body.style.transition = 'box-shadow 0.3s ease-in-out';
@@ -46,13 +55,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const urlParams = new URLSearchParams(window.location.search);
         const phoneParam = urlParams.get('phone');
         if (phoneParam) {
-            openThread(normalizePhone(phoneParam));
+            await openThread(normalizePhone(phoneParam));
+        } else if (!activePhone && !userClosedThread && sortedPhones && sortedPhones.length > 0) {
+            await openThread(sortedPhones[0]);
         }
     }
 
     async function loadContactsMap() {
         try {
-            const res = await fetch('/api/contacts/');
+            const res = await fetch('/api/contacts/', { cache: 'no-store' });
             const contacts = await res.json();
             contacts.forEach(c => {
                 contactsCache[normalizePhone(c.phone_number)] = c.name;
@@ -86,19 +97,32 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
 
-            renderSidebar(threads);
+            const sortedPhones = renderSidebar(threads);
+
+            const hasUnread = sortedPhones.some(phone => {
+                const msg = threads[phone].latestMsg;
+                const msgSender = normalizePhone(msg.sender);
+                const isOutbound = msgSender === SYSTEM_PHONE || !msgSender;
+                return !isOutbound && (msg.web_viewed === false || msg.web_viewed === 0);
+            });
+            if (!hasUnread) {
+                stopAlert();
+            }
+
+            return sortedPhones;
         } catch (err) {
             console.error('Failed to load threads', err);
+            return [];
         }
     }
 
     function renderSidebar(threads) {
-        if (!threadList) return;
-        threadList.innerHTML = '';
-
         const sortedPhones = Object.keys(threads).sort((a, b) => {
             return parseUTCDate(threads[b].latestMsg.timestamp) - parseUTCDate(threads[a].latestMsg.timestamp);
         });
+
+        if (!threadList) return sortedPhones;
+        threadList.innerHTML = '';
 
         sortedPhones.forEach(phone => {
             const data = threads[phone];
@@ -130,16 +154,18 @@ document.addEventListener('DOMContentLoaded', () => {
             el.onclick = () => openThread(phone);
             threadList.appendChild(el);
         });
+
+        return sortedPhones;
     }
 
     function markActiveThreadRead() {
         if (!activePhone) return;
+        unreadInActiveThread = false;
         fetch('/api/messages/mark-read/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ phone: activePhone })
         }).then(() => {
-            unreadInActiveThread = false;
             stopAlert();
             loadThreads();
         }).catch(err => console.error('Failed to mark thread as read', err));
@@ -155,28 +181,81 @@ document.addEventListener('DOMContentLoaded', () => {
         chatArea.addEventListener('mousemove', handleInteraction);
     }
 
-    async function openThread(phone) {
-        activePhone = normalizePhone(phone);
-        unreadInActiveThread = false;
+    function getStatusHtml(msg, isOutbound) {
+        if (!isOutbound) return '';
+        if (msg.is_failed) return `<span class="text-red-300 text-xs ml-2" title="${msg.error_reason || 'Failed'}">❌</span>`;
+        if (msg.is_delivered) return `<span class="text-blue-200 text-xs ml-2" title="Delivered">✓✓</span>`;
+        if (msg.is_sent) return `<span class="text-gray-200 text-xs ml-2" title="Sent">✓</span>`;
+        return `<span class="text-gray-300 text-xs ml-2" title="Sending">...</span>`;
+    }
 
-        markActiveThreadRead();
+    async function syncActiveThread(options = { forceScroll: false }) {
+        const targetPhone = activePhone;
+        if (!targetPhone) return;
 
         try {
             const [inbound, outbound] = await Promise.all([
-                fetch(`/api/messages/?sender=${encodeURIComponent(activePhone)}`, { cache: 'no-store' }).then(r => r.json()),
-                fetch(`/api/messages/?recipient=${encodeURIComponent(activePhone)}`, { cache: 'no-store' }).then(r => r.json())
+                fetch(`/api/messages/?sender=${encodeURIComponent(targetPhone)}`, { cache: 'no-store' }).then(r => r.json()),
+                fetch(`/api/messages/?recipient=${encodeURIComponent(targetPhone)}`, { cache: 'no-store' }).then(r => r.json())
             ]);
 
-            const allMessages = [...inbound, ...outbound].sort((a, b) => parseUTCDate(a.timestamp) - parseUTCDate(b.timestamp));
-            renderChatArea(allMessages);
+            if (activePhone !== targetPhone) return;
 
+            const msgMap = new Map();
+            [...inbound, ...outbound].forEach(m => msgMap.set(m.id, m));
+            const allMessages = Array.from(msgMap.values()).sort((a, b) => parseUTCDate(a.timestamp) - parseUTCDate(b.timestamp));
+
+            if (!chatArea) return;
+
+            if (!chatArea.querySelector('[data-internal-id]')) {
+                renderChatArea(allMessages);
+                return;
+            }
+
+            let addedOrUpdated = false;
+            allMessages.forEach(msg => {
+                const existingBubble = chatArea.querySelector(`[data-internal-id="${msg.id}"]`);
+                if (!existingBubble) {
+                    appendMessageBubble(msg);
+                    addedOrUpdated = true;
+                } else {
+                    const statusEl = existingBubble.querySelector('.msg-status-indicator');
+                    if (statusEl) {
+                        const msgSender = normalizePhone(msg.sender);
+                        const isOutbound = msgSender === SYSTEM_PHONE || !msgSender;
+                        const nextStatusHtml = getStatusHtml(msg, isOutbound);
+                        if (statusEl.innerHTML !== nextStatusHtml) {
+                            statusEl.innerHTML = nextStatusHtml;
+                            addedOrUpdated = true;
+                        }
+                    }
+                }
+            });
+
+            if (addedOrUpdated || options.forceScroll) {
+                scrollToBottom();
+            }
         } catch (err) {
             console.error('Failed to load chat history', err);
         }
     }
 
+    async function openThread(phone) {
+        const normalized = normalizePhone(phone);
+        userClosedThread = false;
+        if (activePhone !== normalized && chatArea) {
+            chatArea.innerHTML = '';
+        }
+        activePhone = normalized;
+        unreadInActiveThread = false;
+
+        markActiveThreadRead();
+        await syncActiveThread({ forceScroll: true });
+    }
+
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
+            userClosedThread = true;
             activePhone = null;
             unreadInActiveThread = false;
             stopAlert();
@@ -203,7 +282,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         messages.forEach(msg => appendMessageBubble(msg));
-        chatArea.scrollTop = chatArea.scrollHeight;
+        scrollToBottom();
     }
 
     function appendMessageBubble(msg) {
@@ -248,13 +327,7 @@ document.addEventListener('DOMContentLoaded', () => {
             contentHtml = `<div class="text-sm italic ${isOutbound ? 'text-blue-200' : 'text-gray-500'}">[MMS absent]</div>`;
         }
 
-        let statusHtml = '';
-        if (isOutbound) {
-            if (msg.is_failed) statusHtml = `<span class="text-red-300 text-xs ml-2" title="${msg.error_reason || 'Failed'}">❌</span>`;
-            else if (msg.is_delivered) statusHtml = `<span class="text-blue-200 text-xs ml-2" title="Delivered">✓✓</span>`;
-            else if (msg.is_sent) statusHtml = `<span class="text-gray-200 text-xs ml-2" title="Sent">✓</span>`;
-            else statusHtml = `<span class="text-gray-300 text-xs ml-2" title="Sending">...</span>`;
-        }
+        const statusHtml = `<span class="msg-status-indicator">${getStatusHtml(msg, isOutbound)}</span>`;
 
         const formattedDate = parseUTCDate(msg.timestamp).toLocaleString([], {
             month: 'short',
@@ -270,6 +343,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 ${statusHtml}
             </div>
         `;
+
+        bubble.querySelectorAll('img, video').forEach(mediaEl => {
+            mediaEl.addEventListener('load', scrollToBottom);
+            mediaEl.addEventListener('loadedmetadata', scrollToBottom);
+        });
 
         if (hasText) {
             const copyBtn = document.createElement('button');
@@ -287,7 +365,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         chatArea.appendChild(bubble);
-        chatArea.scrollTop = chatArea.scrollHeight;
+        scrollToBottom();
     }
 
     if (messageForm && messageInput) {
@@ -325,7 +403,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 if (res.ok) {
                     const newMsg = await res.json();
-                    appendMessageBubble(newMsg);
+                    if (!chatArea.querySelector('[data-internal-id]') && chatArea.children.length > 0) {
+                        chatArea.innerHTML = '';
+                    }
+                    if (!chatArea.querySelector(`[data-internal-id="${newMsg.id}"]`)) {
+                        appendMessageBubble(newMsg);
+                    }
+                    scrollToBottom();
                     stopAlert();
                     loadThreads();
                 }
@@ -402,36 +486,80 @@ document.addEventListener('DOMContentLoaded', () => {
             involvedPhone = normRecipient;
         }
 
+        const isInbound = Boolean(normSender && normSender !== SYSTEM_PHONE);
+
         if (activePhone === involvedPhone && involvedPhone !== null) {
+            if (!chatArea.querySelector('[data-internal-id]') && chatArea.children.length > 0) {
+                chatArea.innerHTML = '';
+            }
             // Guard against double-append: the window that sent the message
             // already rendered it in the submit handler (app.js / the
             // /api/messages/ POST response). Skip if this id is present.
             if (!chatArea.querySelector(`[data-internal-id="${msg.id}"]`)) {
                 appendMessageBubble(msg);
             }
+            scrollToBottom();
 
-            if (normSender && normSender !== SYSTEM_PHONE) {
-                unreadInActiveThread = true;
+            if (isInbound) {
+                if (document.visibilityState === 'visible' && document.hasFocus()) {
+                    markActiveThreadRead();
+                } else {
+                    unreadInActiveThread = true;
+                    startAlert();
+                }
             }
-        }
-
-        if (normSender && normSender !== SYSTEM_PHONE) {
+        } else if (!activePhone && !userClosedThread && involvedPhone !== null) {
+            openThread(involvedPhone);
+        } else if (isInbound) {
             startAlert();
         }
 
         loadThreads();
     });
 
-    window.addEventListener('sse:status_update', (e) => {
+    window.addEventListener('sse:status_update', () => {
         if (activePhone) {
-            fetch(`/api/messages/?sender=${encodeURIComponent(activePhone)}`, { cache: 'no-store' }).then(r => r.json()).then(inbound => {
-                fetch(`/api/messages/?recipient=${encodeURIComponent(activePhone)}`, { cache: 'no-store' }).then(r => r.json()).then(outbound => {
-                    const allMessages = [...inbound, ...outbound].sort((a, b) => parseUTCDate(a.timestamp) - parseUTCDate(b.timestamp));
-                    renderChatArea(allMessages);
-                });
-            });
+            syncActiveThread({ forceScroll: true });
         }
     });
+
+    window.addEventListener('sse:thread_read', (e) => {
+        if (e.detail && normalizePhone(e.detail.phone) === activePhone) {
+            unreadInActiveThread = false;
+        }
+        loadThreads();
+    });
+
+    window.addEventListener('sse:reconnected', () => {
+        loadThreads();
+        if (activePhone) {
+            syncActiveThread({ forceScroll: false });
+        }
+    });
+
+    function handleReturnToApp() {
+        if (unreadInActiveThread) {
+            markActiveThreadRead();
+        }
+        loadThreads();
+        if (activePhone) {
+            syncActiveThread({ forceScroll: false });
+        }
+    }
+
+    window.addEventListener('focus', handleReturnToApp);
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+            handleReturnToApp();
+        }
+    });
+
+    setInterval(() => {
+        loadThreads();
+        if (activePhone) {
+            syncActiveThread({ forceScroll: false });
+        }
+    }, 30000);
 
     init();
 });

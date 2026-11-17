@@ -5,6 +5,7 @@ import json
 import os
 import base64
 import uuid
+import re
 from datetime import datetime, timezone
 
 from database import get_db
@@ -17,6 +18,21 @@ router = APIRouter()
 
 MEDIA_DIR = "static/media"
 os.makedirs(MEDIA_DIR, exist_ok=True)
+
+
+def format_to_e164(phone: str) -> str:
+    """Standardizes phone numbers to E.164 format."""
+    if not phone:
+        return ""
+    phone = str(phone).strip()
+    clean = re.sub(r"\D", "", phone)
+    if not clean:
+        return phone
+    if len(clean) == 10:
+        return f"+1{clean}"
+    elif len(clean) == 11 and clean.startswith("1"):
+        return f"+{clean}"
+    return f"+{clean}"
 
 async def dump_raw_webhook(payload: dict, db: Session):
     """Failsafe: Dumps raw incoming webhooks to the database."""
@@ -43,8 +59,14 @@ async def handle_inbound(request: Request, db: Session = Depends(get_db)):
     msg_data = payload.get("payload", payload.get("message", payload.get("data", payload)))
     action = payload.get("action", payload.get("event", msg_data.get("type", "")))
 
-    sender = msg_data.get("address", msg_data.get("sender", msg_data.get("from", "")))
-    recipient = msg_data.get("recipient", msg_data.get("to", "")) or settings.SMS_DID
+    raw_sender = msg_data.get("address", msg_data.get("sender", msg_data.get("from", "")))
+    if raw_sender and str(raw_sender).strip().lower() != "unknown":
+        sender = format_to_e164(raw_sender)
+    else:
+        sender = raw_sender
+    raw_recipient = msg_data.get("recipient", msg_data.get("to", "")) or settings.SMS_DID
+    recipient = format_to_e164(raw_recipient)
+    normalized_did = format_to_e164(settings.SMS_DID)
     message_id = msg_data.get("messageId", msg_data.get("id", None))
     if message_id:
         message_id = str(message_id)
@@ -53,7 +75,7 @@ async def handle_inbound(request: Request, db: Session = Depends(get_db)):
     # STEP 1: Process mms:received (Save sender & message_id metadata)
     # ---------------------------------------------------------
     if action == "mms:received":
-        if message_id and sender and sender != "unknown":
+        if message_id and sender and str(sender).strip().lower() != "unknown":
             existing = db.query(models.Message).filter(models.Message.message_id == message_id).first()
             if not existing:
                 pending_msg = models.Message(
@@ -84,20 +106,20 @@ async def handle_inbound(request: Request, db: Session = Depends(get_db)):
         # Update the existing record created during mms:received
         if body:
             db_msg.body = body
-        if sender and sender != "unknown":
+        if sender and str(sender).strip().lower() != "unknown":
             db_msg.sender = sender
     else:
         # Fallback: Check if sender is unknown and resolve from last valid interaction
-        if (not sender or sender == "unknown"):
+        if not sender or str(sender).strip().lower() == "unknown":
             last_valid_msg = db.query(models.Message).filter(
                 models.Message.sender != "unknown",
                 models.Message.sender != None,
-                models.Message.sender != settings.SMS_DID,
+                models.Message.sender != normalized_did,
                 models.Message.recipient == recipient
             ).order_by(models.Message.timestamp.desc()).first()
 
             if last_valid_msg:
-                sender = last_valid_msg.sender
+                sender = format_to_e164(last_valid_msg.sender)
 
         if not sender and not recipient:
             logger.warning("Ghost message rejected: Both sender and recipient are empty.")
@@ -120,7 +142,7 @@ async def handle_inbound(request: Request, db: Session = Depends(get_db)):
     processed_attachments = []
 
     if attachments:
-        clean_number = "".join(filter(str.isdigit, db_msg.sender)) or "unknown"
+        clean_number = "".join(filter(str.isdigit, db_msg.sender or "")) or "unknown"
         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         for index, att in enumerate(attachments):
@@ -168,11 +190,15 @@ async def handle_inbound(request: Request, db: Session = Depends(get_db)):
         "is_inbound": True,
         "is_sent": db_msg.is_sent if hasattr(db_msg, 'is_sent') else False,
         "is_delivered": db_msg.is_delivered if hasattr(db_msg, 'is_delivered') else False,
+        "is_read": db_msg.is_read if hasattr(db_msg, 'is_read') else False,
         "is_failed": db_msg.is_failed if hasattr(db_msg, 'is_failed') else False,
         "is_cancelled": db_msg.is_cancelled if hasattr(db_msg, 'is_cancelled') else False,
         "error_reason": db_msg.error_reason if hasattr(db_msg, 'error_reason') else None,
         "web_viewed": db_msg.web_viewed if hasattr(db_msg, 'web_viewed') else False,
-        "attachments": processed_attachments
+        "attachments": [
+            {"filename": a.filename, "content_type": a.content_type}
+            for a in db_msg.attachments
+        ]
     }
     await broadcaster.publish("new_message", broadcast_data)
 
