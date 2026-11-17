@@ -20,6 +20,12 @@
     transition: color 0.3s ease, transform 0.2s ease;
 }
 
+/* Prevent Firefox scroll anchoring from fighting programmatic scroll-to-bottom */
+#chat-area {
+    overflow-anchor: none;
+    scroll-behavior: auto;
+}
+
 /* Custom fine-tuned scrollbar styling */
 ::-webkit-scrollbar {
     width: 6px;

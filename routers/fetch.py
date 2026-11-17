@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
@@ -35,6 +36,17 @@ def get_phone_variants(phone: str) -> List[str]:
     return list(dict.fromkeys(v for v in variants if v))
 
 
+def build_phone_filter(column, phone: str):
+    """Matches stored phone numbers across E.164 variants and formatted legacy strings."""
+    variants = get_phone_variants(phone)
+    clean = re.sub(r"\D", "", phone.strip())
+    if len(clean) >= 10:
+        last10 = clean[-10:]
+        formatted_pattern = f"%{last10[:3]}%{last10[3:6]}%{last10[6:]}%"
+        return or_(column.in_(variants), column.like(formatted_pattern))
+    return column.in_(variants)
+
+
 @router.get("/", response_model=List[schemas.MessageResponse])
 def get_messages(
     sender: Optional[str] = None,
@@ -51,9 +63,9 @@ def get_messages(
     query = db.query(models.Message)
 
     if sender:
-        query = query.filter(models.Message.sender.in_(get_phone_variants(sender)))
+        query = query.filter(build_phone_filter(models.Message.sender, sender))
     if recipient:
-        query = query.filter(models.Message.recipient.in_(get_phone_variants(recipient)))
+        query = query.filter(build_phone_filter(models.Message.recipient, recipient))
     if from_datetime:
         query = query.filter(models.Message.timestamp >= from_datetime)
     if to_datetime:
@@ -70,10 +82,9 @@ async def mark_thread_as_read(payload: MarkReadPayload, db: Session = Depends(ge
     Marks all inbound messages from a specific sender as viewed in the web UI.
     """
     normalized_phone = payload.phone.strip()
-    phone_variants = get_phone_variants(normalized_phone)
     
     db.query(models.Message).filter(
-        models.Message.sender.in_(phone_variants),
+        build_phone_filter(models.Message.sender, normalized_phone),
         models.Message.web_viewed == False
     ).update({"web_viewed": True}, synchronize_session=False)
     

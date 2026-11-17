@@ -108,6 +108,8 @@ async def handle_inbound(request: Request, db: Session = Depends(get_db)):
             db_msg.body = body
         if sender and str(sender).strip().lower() != "unknown":
             db_msg.sender = sender
+        db_msg.timestamp = datetime.now(timezone.utc)
+        db_msg.web_viewed = False
     else:
         # Fallback: Check if sender is unknown and resolve from last valid interaction
         if not sender or str(sender).strip().lower() == "unknown":
