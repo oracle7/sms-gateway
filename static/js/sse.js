@@ -8,6 +8,59 @@ document.addEventListener('DOMContentLoaded', () => {
     let hasConnectedOnce = false;
     let lastActivityTime = Date.now();
 
+    function updateHealthUI(data) {
+        if (!data) return;
+
+        // Update Battery Text
+        const batLevel = document.getElementById('battery-level');
+        if (batLevel) {
+            const level = data.battery_level !== undefined && data.battery_level !== null ? data.battery_level : '--';
+            batLevel.textContent = level + '%';
+        }
+
+        // Toggle Lightning Bolt Icon
+        const batCharging = document.getElementById('battery-charging');
+        if (batCharging) {
+            if (data.is_charging) {
+                batCharging.classList.remove('hidden');
+            } else {
+                batCharging.classList.add('hidden');
+            }
+        }
+
+        // Update LED Color based on status
+        const led = document.getElementById('device-health-led');
+        if (led) {
+            led.classList.remove('bg-slate-300', 'bg-green-500', 'bg-yellow-500', 'bg-red-500', 'animate-pulse');
+
+            if (data.status === 'pass') {
+                led.classList.add('bg-green-500');
+                led.title = "System Healthy";
+            } else if (data.status === 'warn') {
+                led.classList.add('bg-yellow-500');
+                led.title = "Warning: Check Device";
+            } else if (data.status === 'fail') {
+                led.classList.add('bg-red-500', 'animate-pulse');
+                led.title = "Critical Failure";
+            } else {
+                led.classList.add('bg-slate-300');
+                led.title = "Waiting for ping...";
+            }
+        }
+    }
+
+    async function pollHealthStatus() {
+        try {
+            const res = await fetch('/health/status', { cache: 'no-store' });
+            if (res.ok) {
+                const data = await res.json();
+                updateHealthUI(data);
+            }
+        } catch (err) {
+            console.warn('[Health] Failed to poll device status:', err);
+        }
+    }
+
     function initSSE() {
         if (evtSource) {
             evtSource.close();
@@ -25,6 +78,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 detail: { isReconnect: hasConnectedOnce }
             }));
             hasConnectedOnce = true;
+            pollHealthStatus();
         };
 
         evtSource.onmessage = (event) => {
@@ -46,43 +100,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 else if (payload.type === 'thread_read') {
                     window.dispatchEvent(new CustomEvent('sse:thread_read', { detail: payload.data }));
                 }
-                // --- NEW HEALTH UPDATE HANDLER ---
                 else if (payload.type === 'health_update') {
-                    const data = payload.data;
-
-                    // Update Battery Text
-                    const batLevel = document.getElementById('battery-level');
-                    if (batLevel) batLevel.textContent = data.battery_level + '%';
-
-                    // Toggle Lightning Bolt Icon
-                    const batCharging = document.getElementById('battery-charging');
-                    if (batCharging) {
-                        if (data.is_charging) {
-                            batCharging.classList.remove('hidden');
-                        } else {
-                            batCharging.classList.add('hidden');
-                        }
-                    }
-
-                    // Update LED Color based on status
-                    const led = document.getElementById('device-health-led');
-                    if (led) {
-                        // Clear existing colors
-                        led.classList.remove('bg-slate-300', 'bg-green-500', 'bg-yellow-500', 'bg-red-500', 'animate-pulse');
-
-                        if (data.status === 'pass') {
-                            led.classList.add('bg-green-500');
-                            led.title = "System Healthy";
-                        } else if (data.status === 'warn') {
-                            led.classList.add('bg-yellow-500');
-                            led.title = "Warning: Check Device";
-                        } else if (data.status === 'fail') {
-                            led.classList.add('bg-red-500', 'animate-pulse');
-                            led.title = "Critical Failure";
-                        } else {
-                            led.classList.add('bg-slate-300');
-                        }
-                    }
+                    updateHealthUI(payload.data);
                 }
             } catch (error) {
                 console.error('[SSE] Error parsing event data:', error);
@@ -124,4 +143,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     initSSE();
+    pollHealthStatus();
+    setInterval(pollHealthStatus, 60000);
 });

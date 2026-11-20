@@ -6,7 +6,7 @@ import os
 import base64
 import uuid
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from database import get_db
 import models
@@ -59,7 +59,7 @@ async def handle_inbound(request: Request, db: Session = Depends(get_db)):
     msg_data = payload.get("payload", payload.get("message", payload.get("data", payload)))
     action = payload.get("action", payload.get("event", msg_data.get("type", "")))
 
-    raw_sender = msg_data.get("address", msg_data.get("sender", msg_data.get("from", "")))
+    raw_sender = msg_data.get("address", msg_data.get("sender", msg_data.get("phoneNumber", msg_data.get("from", ""))))
     if raw_sender and str(raw_sender).strip().lower() != "unknown":
         sender = format_to_e164(raw_sender)
     else:
@@ -111,31 +111,72 @@ async def handle_inbound(request: Request, db: Session = Depends(get_db)):
         db_msg.timestamp = datetime.now(timezone.utc)
         db_msg.web_viewed = False
     else:
-        # Fallback: Check if sender is unknown and resolve from last valid interaction
-        if not sender or str(sender).strip().lower() == "unknown":
-            last_valid_msg = db.query(models.Message).filter(
-                models.Message.sender != "unknown",
-                models.Message.sender != None,
-                models.Message.sender != normalized_did,
-                models.Message.recipient == recipient
-            ).order_by(models.Message.timestamp.desc()).first()
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).replace(tzinfo=None)
 
-            if last_valid_msg:
-                sender = format_to_e164(last_valid_msg.sender)
+        if action == "mms:downloaded":
+            if sender and str(sender).strip().lower() != "unknown":
+                pending_mms = db.query(models.Message).filter(
+                    models.Message.sender == sender,
+                    models.Message.body == "",
+                    models.Message.timestamp >= cutoff,
+                    ~models.Message.attachments.any()
+                ).order_by(models.Message.timestamp.desc()).first()
 
-        if not sender and not recipient:
-            logger.warning("Ghost message rejected: Both sender and recipient are empty.")
-            return {"status": "ignored", "reason": "Missing sender and recipient"}
+                if pending_mms:
+                    db_msg = pending_mms
+                    if message_id:
+                        db_msg.message_id = message_id
+                    if body:
+                        db_msg.body = body
+                    db_msg.timestamp = datetime.now(timezone.utc)
+                    db_msg.web_viewed = False
+            else:
+                pending_mms = db.query(models.Message).filter(
+                    models.Message.body == "",
+                    models.Message.sender != None,
+                    models.Message.sender != "unknown",
+                    models.Message.sender != normalized_did,
+                    models.Message.timestamp >= cutoff,
+                    ~models.Message.attachments.any()
+                ).order_by(models.Message.timestamp.desc()).first()
 
-        db_msg = models.Message(
-            message_id=message_id,
-            sender=sender,
-            recipient=recipient,
-            body=body or "",
-            timestamp=datetime.now(timezone.utc),
-            is_delivered=True
-        )
-        db.add(db_msg)
+                if pending_mms:
+                    db_msg = pending_mms
+                    sender = format_to_e164(pending_mms.sender)
+                    db_msg.sender = sender
+                    if message_id:
+                        db_msg.message_id = message_id
+                    if body:
+                        db_msg.body = body
+                    db_msg.timestamp = datetime.now(timezone.utc)
+                    db_msg.web_viewed = False
+
+        if not db_msg:
+            # Fallback: Check if sender is unknown and resolve from last valid interaction
+            if not sender or str(sender).strip().lower() == "unknown":
+                last_valid_msg = db.query(models.Message).filter(
+                    models.Message.sender != "unknown",
+                    models.Message.sender != None,
+                    models.Message.sender != normalized_did,
+                    models.Message.recipient == recipient
+                ).order_by(models.Message.timestamp.desc()).first()
+
+                if last_valid_msg:
+                    sender = format_to_e164(last_valid_msg.sender)
+
+            if not sender and not recipient:
+                logger.warning("Ghost message rejected: Both sender and recipient are empty.")
+                return {"status": "ignored", "reason": "Missing sender and recipient"}
+
+            db_msg = models.Message(
+                message_id=message_id,
+                sender=sender,
+                recipient=recipient,
+                body=body or "",
+                timestamp=datetime.now(timezone.utc),
+                is_delivered=True
+            )
+            db.add(db_msg)
 
     db.flush() # Generate db_msg.id for attachments
 
@@ -152,6 +193,15 @@ async def handle_inbound(request: Request, db: Session = Depends(get_db)):
             b64_data = att.get("data", att.get("base64", ""))
 
             if b64_data:
+                if content_type.lower().startswith("text/plain"):
+                    try:
+                        decoded_text = base64.b64decode(b64_data).decode("utf-8", errors="ignore").strip()
+                        if decoded_text and not db_msg.body:
+                            db_msg.body = decoded_text
+                    except Exception as e:
+                        logger.error(f"Failed to decode text/plain MMS attachment: {e}")
+                    continue
+
                 ext = content_type.split("/")[-1] if "/" in content_type else "bin"
                 if ext == "jpeg":
                     ext = "jpg"

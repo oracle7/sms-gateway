@@ -44,19 +44,27 @@ document.addEventListener('DOMContentLoaded', () => {
     let originalTitle = document.title;
     let alertInterval = null;
     let scrollTimers = [];
+    let shouldStickToBottom = true;
+    let stickTimer = null;
 
     function performScroll() {
         if (!chatArea) return;
-        chatArea.scrollTop = chatArea.scrollHeight;
+        chatArea.scrollTop = chatArea.scrollHeight + 10000;
         const lastBubble = chatArea.lastElementChild;
         if (lastBubble && typeof lastBubble.scrollIntoView === 'function') {
             lastBubble.scrollIntoView({ block: 'end' });
         }
-        chatArea.scrollTop = chatArea.scrollHeight;
+        chatArea.scrollTop = chatArea.scrollHeight + 10000;
     }
 
     function scrollToBottom() {
         if (!chatArea) return;
+        shouldStickToBottom = true;
+        if (stickTimer) clearTimeout(stickTimer);
+        stickTimer = setTimeout(() => {
+            shouldStickToBottom = false;
+        }, 500);
+
         scrollTimers.forEach(id => clearTimeout(id));
         scrollTimers = [];
 
@@ -68,6 +76,15 @@ document.addEventListener('DOMContentLoaded', () => {
         scrollTimers.push(setTimeout(performScroll, 40));
         scrollTimers.push(setTimeout(performScroll, 120));
         scrollTimers.push(setTimeout(performScroll, 250));
+    }
+
+    if (chatArea && typeof ResizeObserver !== 'undefined') {
+        const chatResizeObserver = new ResizeObserver(() => {
+            if (shouldStickToBottom) {
+                performScroll();
+            }
+        });
+        chatResizeObserver.observe(chatArea);
     }
 
     function parseUTCDate(timestamp) {
@@ -118,7 +135,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const contactPhone = getInvolvedPhone(msg);
                 if (!contactPhone) return;
 
-                if (!threads[contactPhone]) {
+                if (!threads[contactPhone] || parseUTCDate(msg.timestamp) > parseUTCDate(threads[contactPhone].latestMsg.timestamp)) {
                     threads[contactPhone] = { latestMsg: msg };
                 }
             });
