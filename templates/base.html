@@ -3,41 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Messaging Center</title>
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js"></script>
-    <style>
-        /* Custom scrollbar for a cleaner chat look */
-        ::-webkit-scrollbar {
-            width: 6px;
-        }
-
-        ::-webkit-scrollbar-track {
-            background: transparent;
-        }
-
-        ::-webkit-scrollbar-thumb {
-            background: #cbd5e1;
-            border-radius: 4px;
-        }
-
-            ::-webkit-scrollbar-thumb:hover {
-                background: #94a3b8;
-            }
-    </style>
-    <link rel="stylesheet" href="/static/css/custom.css?v=2.3">
+    <title>{% block title %}Messaging Center{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/tokens.css?v={{ build_id }}">
+    <link rel="stylesheet" href="/static/css/base.css?v={{ build_id }}">
+    {% block styles %}{% endblock %}
 </head>
-<body class="bg-gray-100 h-screen flex flex-col font-sans text-gray-800">
+<body class="{% block body_class %}app-shell{% endblock %}"
+      data-build-id="{{ build_id }}"
+      data-app-version="{{ app_version }}"
+      data-system-phone="{{ sms_did | default('+19296141937') }}"
+      data-user-role="{{ user.role if user else '' }}"
+      data-user-name="{{ user.display_name if user else '' }}"
+      data-csrf-token="{{ csrf_token | default('') }}"
+      data-idle-timeout-sec="{{ idle_timeout_seconds | default(1800) }}">
 
-    <!-- Dynamic Content Block -->
     {% block content %}{% endblock %}
 
-    <!-- Global SSE Listener -->
-    <script>window.SYSTEM_PHONE = "{{ sms_did | default('+19296141937') }}";</script>
-    <script src="/static/js/sse.js?v=2.3"></script>
-
-    <!-- Page Specific Scripts Block -->
     {% block scripts %}{% endblock %}
 </body>
 </html>

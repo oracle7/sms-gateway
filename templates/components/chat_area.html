@@ -1,35 +1,38 @@
-<main class="flex-1 flex flex-col h-full min-h-0 overflow-hidden bg-gray-50 relative">
-    <!-- Message Bubbles Container -->
-    <div id="chat-area" class="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col space-y-3">
-        <div class="flex h-full items-center justify-center text-gray-400">
-            Messages will appear here...
+<main class="chat-pane">
+    <div id="chat-header" class="chat-header hidden">
+        <div class="chat-header-info">
+            <h3 id="chat-contact-name" class="chat-contact-name">Select a conversation</h3>
+            <div id="chat-contact-phone" class="chat-contact-phone"></div>
+        </div>
+        <div class="chat-header-actions">
+            {% if user and user.role == 'admin' %}
+            <label class="toggle-label">
+                <input id="show-hidden-toggle" type="checkbox">
+                Show hidden
+            </label>
+            {% endif %}
+            <button id="archive-thread-btn" type="button" class="btn btn-secondary btn-sm">Archive</button>
         </div>
     </div>
 
-    <!-- Floating Emoji Picker (Hidden by default) -->
-    <emoji-picker id="emoji-picker" class="hidden absolute bottom-20 left-4 z-50 shadow-2xl rounded-2xl border border-gray-200 light"></emoji-picker>
+    <div id="chat-area" class="chat-messages">
+        <div class="chat-empty-state">Select a conversation on the left, or click <strong>+ New</strong> to start one.</div>
+    </div>
 
-    <!-- Message Input Form -->
-    <div class="p-4 bg-white border-t border-gray-200 shrink-0 z-10">
-        <form id="message-form" class="flex space-x-2 items-end">
+    <div class="composer-wrap">
+        <div id="composer-error" class="composer-error hidden" role="alert"></div>
+        <div id="emoji-picker-panel" class="emoji-picker-panel hidden" role="dialog" aria-label="Emoji picker"></div>
 
-            <!-- Emoji Toggle Button -->
-            <button type="button" id="emoji-toggle-btn" class="p-2 mb-1 text-gray-500 hover:text-gray-700 focus:outline-none shrink-0" title="Add emoji">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
+        <form id="message-form" class="composer-form">
+            <button id="emoji-toggle-btn" type="button" class="emoji-toggle-btn" title="Add emoji" aria-label="Add emoji">
+                😊
             </button>
-
             <textarea id="message-input"
                       rows="1"
-                      class="flex-1 border border-gray-300 rounded-2xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white resize-none min-h-[44px] max-h-32"
-                      placeholder="Type an SMS... (Shift + Enter for new line)"
+                      class="composer-input"
+                      placeholder="Type an SMS... (Enter to send, Shift + Enter for new line)"
                       autocomplete="off"></textarea>
-
-            <button type="submit"
-                    class="bg-blue-600 text-white rounded-full px-6 py-2 mb-0.5 font-medium hover:bg-blue-700 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 h-[44px] shrink-0">
-                Send
-            </button>
+            <button id="send-btn" type="submit" class="btn btn-primary send-btn">Send</button>
         </form>
     </div>
 </main>

@@ -1,109 +1,78 @@
-from fastapi import APIRouter, Request, Depends, HTTPException
-from sqlalchemy.orm import Session
-from typing import Optional
-import httpx
-import logging
 import json
+import logging
+from typing import Tuple
 
-from config import settings
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy.orm import Session
+
 from database import get_db
-import models
+from routers.webhooks import _dump_raw_webhook
+from services.auth import AuthContext, require_auth_no_refresh, verify_webhook_access
 from services.broadcaster import broadcaster
+from services.gateway_client import (
+    fetch_gateway_health,
+    latest_health_state,
+    parse_health_object,
+    update_cached_health,
+)
+from version import APP_VERSION, BUILD_ID
 
 logger = logging.getLogger("uvicorn.error")
 router = APIRouter()
 
-latest_health_state = {
-    "status": "unknown",
-    "battery_level": "--",
-    "is_charging": False,
-}
+
+@router.get("/health/live")
+def liveness_probe():
+    """Minimal unauthenticated liveness check for Nginx/systemd."""
+    return {"status": "ok"}
 
 
-def parse_health_object(health_data: dict) -> dict:
-    """Extracts normalized status and battery metrics from a gateway health payload."""
-    status = health_data.get("status", "unknown")
-    checks = health_data.get("checks", {})
-
-    battery_level = checks.get("battery:level", {}).get("observedValue", "--")
-    battery_charging_flags = checks.get("battery:charging", {}).get("observedValue", 0)
-
-    if isinstance(battery_charging_flags, bool):
-        is_charging = battery_charging_flags
-    else:
-        is_charging = isinstance(battery_charging_flags, (int, float)) and battery_charging_flags > 0
-
-    return {
-        "status": status,
-        "battery_level": battery_level,
-        "is_charging": is_charging,
-    }
-
-
-async def fetch_device_health() -> Optional[dict]:
-    """Actively polls the Android gateway's local /health endpoint and caches the result."""
-    url = f"{settings.SMS_API_URL.rstrip('/')}/health"
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            auth = httpx.BasicAuth(settings.SMS_API_LOGIN, settings.SMS_API_PASS)
-            resp = await client.get(url, auth=auth)
-            if resp.status_code == 200:
-                data = resp.json()
-                if isinstance(data, dict) and ("checks" in data or "status" in data):
-                    parsed = parse_health_object(data)
-                    latest_health_state.update(parsed)
-                    return dict(latest_health_state)
-    except Exception as e:
-        logger.warning(f"Failed to poll Android gateway health at {url}: {e}")
-    return None
-
-
-async def dump_raw_webhook(payload: dict, db: Session):
-    """Failsafe: Dumps raw incoming health webhooks to the database."""
-    try:
-        raw = models.RawWebhookDump(payload=json.dumps(payload))
-        db.add(raw)
-        db.commit()
-    except Exception as e:
-        logger.error(f"Failed to dump raw health webhook: {e}")
-        db.rollback()
-
-
-@router.get("/status")
-async def get_health_status():
-    """Returns live Android gateway health metrics (falling back to cached state)."""
-    live = await fetch_device_health()
+@router.get("/health/status")
+async def get_health_status(auth: AuthContext = Depends(require_auth_no_refresh)):
+    """Authenticated endpoint returning live Pixel 6 gateway health or cached state."""
+    live = await fetch_gateway_health()
     if live is not None:
         return live
     return dict(latest_health_state)
 
 
-@router.post("")
-@router.post("/")
-async def handle_health_ping(request: Request, db: Session = Depends(get_db)):
-    """
-    Catches system:ping webhooks from the Android Gateway for device health monitoring.
-    """
+@router.post("/health")
+@router.post("/health/")
+async def handle_health_ping(
+    request: Request,
+    verified: Tuple[bytes, bool] = Depends(verify_webhook_access),
+    db: Session = Depends(get_db),
+):
+    """Receives system:ping webhooks from the Pixel 6 Android SMS Gateway."""
+    raw_body, sig_valid = verified
     try:
-        payload = await request.json()
+        payload = json.loads(raw_body.decode("utf-8"))
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
-
-    await dump_raw_webhook(payload, db)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload.")
 
     event = payload.get("event")
     if event != "system:ping":
-        return {"status": "ignored", "reason": f"Unhandled event type: {event}"}
+        _dump_raw_webhook(
+            db,
+            endpoint="/health",
+            event_type=str(event or ""),
+            signature_valid=sig_valid,
+            processing_status="ignored_non_ping",
+            payload=payload,
+        )
+        return {"status": "ignored", "reason": f"Unhandled event: {event}"}
 
     health_data = payload.get("payload", {}).get("health", {})
     if isinstance(health_data, dict) and health_data.get("checks"):
-        latest_health_state.update(parse_health_object(health_data))
+        state = update_cached_health(parse_health_object(health_data))
     else:
-        fetched = await fetch_device_health()
-        if fetched is None:
-            latest_health_state["status"] = "pass"
+        fetched = await fetch_gateway_health()
+        state = fetched if fetched is not None else update_cached_health({"status": "pass"})
 
-    # Broadcast metrics to web UI via SSE
-    await broadcaster.publish("health_update", dict(latest_health_state))
-
+    await broadcaster.publish("health_update", state)
     return {"status": "success"}
+
+
+@router.get("/api/system/version")
+def get_system_version(auth: AuthContext = Depends(require_auth_no_refresh)):
+    return {"app_version": APP_VERSION, "build_id": BUILD_ID}

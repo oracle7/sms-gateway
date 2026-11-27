@@ -1,0 +1,79 @@
+<!-- New Chat Modal -->
+<div id="new-chat-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="new-chat-title">
+    <div class="modal-card">
+        <div class="modal-header">
+            <h3 id="new-chat-title" class="modal-title">Start New Conversation</h3>
+            <button type="button" class="modal-close" data-close-modal="new-chat-modal" aria-label="Close">&times;</button>
+        </div>
+        <form id="new-chat-form">
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label" for="new-chat-contact-select">Choose from Contacts (Optional)</label>
+                    <select id="new-chat-contact-select" class="form-control">
+                        <option value="">-- Select a saved contact --</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="new-chat-phone">Or Enter Phone Number</label>
+                    <input id="new-chat-phone" type="text" class="form-control" placeholder="(929) 555-1234 or +19295551234" required>
+                    <p class="form-hint">10-digit US numbers are formatted automatically.</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-close-modal="new-chat-modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Open Chat</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Idle Timeout Warning Modal -->
+<div id="timeout-modal" class="modal-backdrop hidden" role="alertdialog" aria-modal="true" aria-labelledby="timeout-title">
+    <div class="modal-card">
+        <div class="modal-header">
+            <h3 id="timeout-title" class="modal-title">Session Expiring Soon</h3>
+        </div>
+        <div class="modal-body">
+            <p style="margin-top: 0;">
+                For patient privacy (HIPAA), you will be signed out automatically in
+                <strong id="timeout-countdown">120</strong> seconds due to inactivity.
+            </p>
+        </div>
+        <div class="modal-footer">
+            <button id="timeout-logout-btn" type="button" class="btn btn-secondary">Sign Out Now</button>
+            <button id="timeout-stay-btn" type="button" class="btn btn-primary">Stay Signed In</button>
+        </div>
+    </div>
+</div>
+
+<!-- Change Own Password Modal -->
+<div id="password-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="password-modal-title">
+    <div class="modal-card">
+        <div class="modal-header">
+            <h3 id="password-modal-title" class="modal-title">Change Password</h3>
+            <button type="button" class="modal-close" data-close-modal="password-modal" aria-label="Close">&times;</button>
+        </div>
+        <form id="change-password-form">
+            <div class="modal-body">
+                <div id="change-password-error" class="form-error hidden" role="alert"></div>
+                <div class="form-group">
+                    <label class="form-label" for="cp-current">Current Password</label>
+                    <input id="cp-current" type="password" class="form-control" required autocomplete="current-password">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="cp-new">New Password</label>
+                    <input id="cp-new" type="password" class="form-control" required minlength="12" autocomplete="new-password">
+                    <p class="form-hint">Minimum 12 characters.</p>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="cp-confirm">Confirm New Password</label>
+                    <input id="cp-confirm" type="password" class="form-control" required minlength="12" autocomplete="new-password">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-close-modal="password-modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Update Password</button>
+            </div>
+        </form>
+    </div>
+</div>

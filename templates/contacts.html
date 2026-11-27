@@ -1,65 +1,83 @@
 {% extends "base.html" %}
 
+{% block title %}Contacts - Messaging Center{% endblock %}
+
+{% block styles %}
+<link rel="stylesheet" href="/static/css/admin.css?v={{ build_id }}">
+{% endblock %}
+
 {% block content %}
-    {% include 'components/header.html' %}
+{% include 'components/header.html' %}
 
-<div class="flex-1 overflow-y-auto p-8 max-w-5xl mx-auto w-full">
-    <div class="flex justify-between items-center mb-6">
-        <h2 class="text-2xl font-bold text-gray-800">Address Book</h2>
-        <button onclick="openAddModal()" class="bg-blue-500 text-white px-4 py-2 rounded shadow hover:bg-blue-600 transition">
-            + Add Contact
-        </button>
-    </div>
+<div class="page-container">
+    <div class="page-inner">
+        <div class="page-header-row">
+            <h1 class="page-title">Address Book</h1>
+            <button id="add-contact-btn" type="button" class="btn btn-primary">+ Add Contact</button>
+        </div>
 
-    <!-- Contacts Table -->
-    <div class="bg-white rounded-lg shadow overflow-hidden border border-gray-200">
-        <table class="w-full text-left border-collapse">
-            <thead>
-                <tr class="bg-gray-100 text-gray-600 text-sm uppercase tracking-wider">
-                    <th class="p-3 font-semibold border-b">Name</th>
-                    <th class="p-3 font-semibold border-b">Phone Number</th>
-                    <th class="p-3 font-semibold border-b">Notes</th>
-                    <th class="p-3 font-semibold border-b text-right">Actions</th>
-                </tr>
-            </thead>
-            <tbody id="contacts-table-body" class="text-sm">
-                <!-- Rows populated by contacts.js -->
-            </tbody>
-        </table>
+        <div class="toolbar-row">
+            <input id="contacts-search" type="search" class="form-control" style="max-width: 360px;" placeholder="Search by name, phone, or notes...">
+            <label class="toggle-label">
+                <input id="contacts-show-deleted" type="checkbox">
+                Show removed contacts
+            </label>
+        </div>
+
+        <div class="card-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Phone Number</th>
+                        <th>Notes</th>
+                        <th style="text-align: right;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="contacts-table-body"></tbody>
+            </table>
+        </div>
     </div>
 </div>
 
-<!-- Add/Edit Contact Modal (Hidden by default) -->
-<div id="contact-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-    <div class="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden">
-        <div class="px-6 py-4 border-b bg-gray-50 flex justify-between items-center">
-            <h3 id="modal-title" class="text-lg font-bold text-gray-800">Add Contact</h3>
-            <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+<!-- Add/Edit Contact Modal -->
+<div id="contact-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="contact-modal-title">
+    <div class="modal-card">
+        <div class="modal-header">
+            <h3 id="contact-modal-title" class="modal-title">Add Contact</h3>
+            <button type="button" class="modal-close" data-close-modal="contact-modal" aria-label="Close">&times;</button>
         </div>
-
-        <form id="contact-form" class="p-6 space-y-4">
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
-                <input type="text" id="contact-phone" required class="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="+1234567890">
-                <p class="text-xs text-gray-500 mt-1">Include country code (e.g., +1)</p>
+        <form id="contact-form">
+            <div class="modal-body">
+                <div id="contact-form-error" class="form-error hidden" role="alert"></div>
+                <div class="form-group">
+                    <label class="form-label" for="contact-phone">Phone Number</label>
+                    <input id="contact-phone" type="text" class="form-control" required placeholder="(929) 555-1234 or +19295551234">
+                    <p class="form-hint">10-digit US numbers are formatted automatically.</p>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="contact-name">Name</label>
+                    <input id="contact-name" type="text" class="form-control" required placeholder="Jane Doe">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="contact-notes">Notes</label>
+                    <textarea id="contact-notes" class="form-control" placeholder="Optional details..."></textarea>
+                </div>
             </div>
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">Name</label>
-                <input type="text" id="contact-name" required class="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Jane Doe">
-            </div>
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">Notes</label>
-                <textarea id="contact-notes" rows="3" class="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Optional details..."></textarea>
-            </div>
-            <div class="flex justify-end space-x-3 pt-2">
-                <button type="button" onclick="closeModal()" class="px-4 py-2 border rounded text-gray-600 hover:bg-gray-50">Cancel</button>
-                <button type="submit" class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">Save Contact</button>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-close-modal="contact-modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Contact</button>
             </div>
         </form>
     </div>
 </div>
+
+{% include 'components/modals.html' %}
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/contacts.js?v=2.3"></script>
+<script src="/static/js/api.js?v={{ build_id }}"></script>
+<script src="/static/js/notifications.js?v={{ build_id }}"></script>
+<script src="/static/js/sse.js?v={{ build_id }}"></script>
+<script src="/static/js/contacts.js?v={{ build_id }}"></script>
 {% endblock %}

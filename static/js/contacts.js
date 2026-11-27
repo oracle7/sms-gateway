@@ -1,150 +1,196 @@
 /**
  * contacts.js
- * Manages the address book: reading, adding, editing, and deleting contacts.
+ * Address book CRUD + soft-delete & restore with safe DOM rendering.
  */
 document.addEventListener('DOMContentLoaded', () => {
-    const contactsTable = document.getElementById('contacts-table-body');
-    const contactModal = document.getElementById('contact-modal');
-    const contactForm = document.getElementById('contact-form');
+    const { apiFetch } = window.ClinicApi;
 
-    // Form Inputs
+    const tableBody = document.getElementById('contacts-table-body');
+    const searchInput = document.getElementById('contacts-search');
+    const showDeletedToggle = document.getElementById('contacts-show-deleted');
+    const addBtn = document.getElementById('add-contact-btn');
+
+    const modal = document.getElementById('contact-modal');
+    const modalTitle = document.getElementById('contact-modal-title');
+    const form = document.getElementById('contact-form');
+    const formErr = document.getElementById('contact-form-error');
     const phoneInput = document.getElementById('contact-phone');
     const nameInput = document.getElementById('contact-name');
     const notesInput = document.getElementById('contact-notes');
-    const modalTitle = document.getElementById('modal-title');
 
     let isEditMode = false;
+    let editContactId = null;
 
-    // Normalization helper (E.164 Standard)
-    function normalizePhone(phone, defaultCountryCode = '1') {
-        if (!phone) return '';
-        let cleaned = phone.trim().replace(/[^\d+]/g, '');
-        if (cleaned.startsWith('+')) return '+' + cleaned.replace(/\D/g, '');
-        if (cleaned.length === 10) return `+${defaultCountryCode}${cleaned}`;
-        if (cleaned.length === 11 && cleaned.startsWith(defaultCountryCode)) return `+${cleaned}`;
-        return `+${cleaned}`;
+    function showErr(msg) {
+        if (!formErr) return;
+        if (!msg) {
+            formErr.classList.add('hidden');
+            formErr.textContent = '';
+            return;
+        }
+        formErr.textContent = msg;
+        formErr.classList.remove('hidden');
     }
 
-    // 1. Fetch and render contacts
     async function fetchContacts() {
-        try {
-            const res = await fetch('/api/contacts/');
-            const contacts = await res.json();
-            renderTable(contacts);
-        } catch (err) {
-            console.error('Failed to fetch contacts', err);
-        }
+        const params = new URLSearchParams();
+        if (searchInput && searchInput.value.trim()) params.set('search', searchInput.value.trim());
+        if (showDeletedToggle && showDeletedToggle.checked) params.set('include_deleted', 'true');
+
+        const res = await apiFetch('/api/contacts/?' + params.toString(), { cache: 'no-store' });
+        if (!res.ok) return;
+        const contacts = await res.json();
+        renderTable(contacts);
     }
 
     function renderTable(contacts) {
-        if (!contactsTable) return;
-        contactsTable.innerHTML = '';
+        if (!tableBody) return;
+        tableBody.textContent = '';
 
-        contacts.forEach(c => {
-            const normPhone = normalizePhone(c.phone_number);
+        if (!contacts || contacts.length === 0) {
             const tr = document.createElement('tr');
-            tr.className = "border-b hover:bg-gray-50";
-            tr.innerHTML = `
-                <td class="p-3 font-medium">${c.name}</td>
-                <td class="p-3">${normPhone}</td>
-                <td class="p-3 text-gray-500">${c.notes || ''}</td>
-                <td class="p-3">
-                    <a href="/?phone=${encodeURIComponent(normPhone)}" class="text-blue-500 hover:underline mr-3">Chat</a>
-                    <button class="text-yellow-500 hover:underline mr-3" onclick="openEditModal('${normPhone}', '${c.name}', '${c.notes || ''}')">Edit</button>
-                    <button class="text-red-500 hover:underline" onclick="deleteContact('${normPhone}')">Delete</button>
-                </td>
-            `;
-            contactsTable.appendChild(tr);
-        });
-    }
-
-    // 2. Modal interactions
-    window.openAddModal = () => {
-        isEditMode = false;
-        modalTitle.textContent = "Add Contact";
-        contactForm.reset();
-        phoneInput.disabled = false; // Allow editing phone number on creation
-        contactModal.classList.remove('hidden');
-    };
-
-    window.openEditModal = (phone, name, notes) => {
-        isEditMode = true;
-        modalTitle.textContent = "Edit Contact";
-        phoneInput.value = normalizePhone(phone);
-        phoneInput.disabled = true; // Primary key, cannot change
-        nameInput.value = name;
-        notesInput.value = notes;
-        contactModal.classList.remove('hidden');
-    };
-
-    window.closeModal = () => {
-        contactModal.classList.add('hidden');
-    };
-
-    // 3. Form Submission (Create or Update)
-    if (contactForm) {
-        contactForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-
-            const payload = {
-                name: nameInput.value,
-                notes: notesInput.value
-            };
-
-            const normalizedPhone = normalizePhone(phoneInput.value);
-
-            try {
-                let res;
-                if (isEditMode) {
-                    res = await fetch(`/api/contacts/${encodeURIComponent(normalizedPhone)}`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-                } else {
-                    payload.phone_number = normalizedPhone;
-                    res = await fetch('/api/contacts/', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-                }
-
-                if (res.ok) {
-                    closeModal();
-                    fetchContacts();
-                } else {
-                    const errData = await res.json();
-                    alert(`Error: ${errData.detail || 'Could not save contact.'}`);
-                }
-            } catch (err) {
-                console.error('Failed to save contact', err);
-            }
-        });
-    }
-
-    // 4. Delete Contact
-    window.deleteContact = async (phone) => {
-        const normalizedPhone = normalizePhone(phone);
-        if (!confirm(`Are you sure you want to delete the contact ${normalizedPhone}? Your message history will remain intact.`)) {
+            const td = document.createElement('td');
+            td.colSpan = 4;
+            td.style.textAlign = 'center';
+            td.style.padding = '28px';
+            td.textContent = 'No contacts found.';
+            tr.appendChild(td);
+            tableBody.appendChild(tr);
             return;
         }
 
-        try {
-            const res = await fetch(`/api/contacts/${encodeURIComponent(normalizedPhone)}`, {
-                method: 'DELETE'
-            });
+        contacts.forEach((c) => {
+            const tr = document.createElement('tr');
+
+            const nameTd = document.createElement('td');
+            nameTd.style.fontWeight = '700';
+            nameTd.textContent = c.name + (c.deleted_at ? ' (Removed)' : '');
+
+            const phoneTd = document.createElement('td');
+            phoneTd.textContent = c.display_phone || c.phone_number;
+
+            const notesTd = document.createElement('td');
+            notesTd.style.color = 'var(--text-secondary)';
+            notesTd.textContent = c.notes || '';
+
+            const actionsTd = document.createElement('td');
+            const actionsWrap = document.createElement('div');
+            actionsWrap.className = 'table-actions';
+
+            if (!c.deleted_at) {
+                const chatLink = document.createElement('a');
+                chatLink.href = '/?phone=' + encodeURIComponent(c.phone_number);
+                chatLink.className = 'btn btn-primary btn-sm';
+                chatLink.textContent = 'Chat';
+                actionsWrap.appendChild(chatLink);
+
+                const editBtn = document.createElement('button');
+                editBtn.type = 'button';
+                editBtn.className = 'btn btn-secondary btn-sm';
+                editBtn.textContent = 'Edit';
+                editBtn.addEventListener('click', () => {
+                    isEditMode = true;
+                    editContactId = c.id;
+                    modalTitle.textContent = 'Edit Contact';
+                    showErr('');
+                    phoneInput.value = c.phone_number;
+                    phoneInput.disabled = true;
+                    nameInput.value = c.name;
+                    notesInput.value = c.notes || '';
+                    modal.classList.remove('hidden');
+                    nameInput.focus();
+                });
+                actionsWrap.appendChild(editBtn);
+
+                const delBtn = document.createElement('button');
+                delBtn.type = 'button';
+                delBtn.className = 'btn btn-danger btn-sm';
+                delBtn.textContent = 'Remove';
+                delBtn.addEventListener('click', async () => {
+                    if (!confirm(`Remove contact "${c.name}" from the address book? Message history stays preserved.`)) return;
+                    const res = await apiFetch(`/api/contacts/${encodeURIComponent(String(c.id))}`, { method: 'DELETE' });
+                    if (res.ok) fetchContacts();
+                });
+                actionsWrap.appendChild(delBtn);
+            } else {
+                const restoreBtn = document.createElement('button');
+                restoreBtn.type = 'button';
+                restoreBtn.className = 'btn btn-secondary btn-sm';
+                restoreBtn.textContent = 'Restore';
+                restoreBtn.addEventListener('click', async () => {
+                    const res = await apiFetch(`/api/contacts/${encodeURIComponent(String(c.id))}/restore`, { method: 'POST' });
+                    if (res.ok) fetchContacts();
+                });
+                actionsWrap.appendChild(restoreBtn);
+            }
+
+            actionsTd.appendChild(actionsWrap);
+            tr.appendChild(nameTd);
+            tr.appendChild(phoneTd);
+            tr.appendChild(notesTd);
+            tr.appendChild(actionsTd);
+            tableBody.appendChild(tr);
+        });
+    }
+
+    if (addBtn) {
+        addBtn.addEventListener('click', () => {
+            isEditMode = false;
+            editContactId = null;
+            modalTitle.textContent = 'Add Contact';
+            showErr('');
+            form.reset();
+            phoneInput.disabled = false;
+            modal.classList.remove('hidden');
+            phoneInput.focus();
+        });
+    }
+
+    if (form) {
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            showErr('');
+            const payload = {
+                name: nameInput.value.trim(),
+                notes: notesInput.value.trim() || null,
+            };
+
+            let res;
+            if (isEditMode) {
+                res = await apiFetch(`/api/contacts/${encodeURIComponent(String(editContactId))}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+            } else {
+                payload.phone_number = phoneInput.value.trim();
+                res = await apiFetch('/api/contacts/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+            }
 
             if (res.ok) {
+                modal.classList.add('hidden');
                 fetchContacts();
             } else {
-                alert("Failed to delete contact.");
+                const errData = await res.json().catch(() => ({}));
+                showErr(errData.detail || 'Could not save contact.');
             }
-        } catch (err) {
-            console.error('Failed to delete contact', err);
-        }
-    };
+        });
+    }
 
-    // Initialize
+    if (searchInput) {
+        let timer = null;
+        searchInput.addEventListener('input', () => {
+            clearTimeout(timer);
+            timer = setTimeout(fetchContacts, 250);
+        });
+    }
+    if (showDeletedToggle) {
+        showDeletedToggle.addEventListener('change', fetchContacts);
+    }
+
     fetchContacts();
 });

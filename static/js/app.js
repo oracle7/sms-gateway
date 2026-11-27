@@ -1,467 +1,609 @@
 ﻿/**
  * app.js
- * Controls the main messaging interface (thread list and chat area).
+ * Controls the messaging workspace (paginated threads, chat history, soft-delete,
+ * reliable SMS sending, and real-time SSE reconciliation).
  */
 document.addEventListener('DOMContentLoaded', () => {
+    const { apiFetch } = window.ClinicApi;
+    const isAdmin = (document.body.dataset.userRole || '') === 'admin';
+
     function normalizePhone(phone, defaultCountryCode = '1') {
         if (!phone) return '';
-        let cleaned = String(phone).trim().replace(/[^\d+]/g, '');
-        const digits = cleaned.replace(/\D/g, '');
-        if (!digits) return '';
-        if (cleaned.startsWith('+')) return '+' + digits;
+        const text = String(phone).trim();
+        if (!text || text.toLowerCase() === 'unknown') return 'unknown';
+        const digits = text.replace(/\D/g, '');
+        if (!digits) return text;
+        if (digits.length >= 3 && digits.length <= 6) return digits;
         if (digits.length === 10) return `+${defaultCountryCode}${digits}`;
         if (digits.length === 11 && digits.startsWith(defaultCountryCode)) return `+${digits}`;
         return `+${digits}`;
     }
 
-    const SYSTEM_PHONE = normalizePhone(window.SYSTEM_PHONE || '+19296141937');
-
-    function getInvolvedPhone(msg) {
-        const normSender = normalizePhone(msg.sender);
-        const normRecipient = normalizePhone(msg.recipient);
-        if (normSender && normSender !== SYSTEM_PHONE) {
-            return normSender;
+    function formatPhoneDisplay(phone) {
+        if (!phone || phone === 'unknown') return 'Unknown Sender';
+        if (phone.length === 12 && phone.startsWith('+1') && /^\d+$/.test(phone.slice(2))) {
+            return `(${phone.slice(2, 5)}) ${phone.slice(5, 8)}-${phone.slice(8, 12)}`;
         }
-        if (normRecipient && normRecipient !== SYSTEM_PHONE) {
-            return normRecipient;
-        }
-        return null;
+        return phone;
     }
 
-    const threadList = document.getElementById('thread-list');
-    const chatArea = document.getElementById('chat-area');
+    function parseUTCDate(timestamp) {
+        if (!timestamp) return new Date();
+        let ts = timestamp;
+        if (typeof ts === 'string' && !ts.endsWith('Z') && !/[\+\-]\d{2}:\d{2}$/.test(ts)) {
+            ts += 'Z';
+        }
+        return new Date(ts);
+    }
+
+    function formatShortTime(ts) {
+        if (!ts) return '';
+        const d = parseUTCDate(ts);
+        return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+
+    const threadListEl = document.getElementById('thread-list');
+    const threadSearchEl = document.getElementById('thread-search');
+    const tabInboxBtn = document.getElementById('tab-inbox');
+    const tabArchivedBtn = document.getElementById('tab-archived');
+    const threadsLoadMoreWrap = document.getElementById('threads-load-more-wrap');
+    const threadsLoadMoreBtn = document.getElementById('threads-load-more-btn');
+
+    const chatHeaderEl = document.getElementById('chat-header');
+    const chatContactNameEl = document.getElementById('chat-contact-name');
+    const chatContactPhoneEl = document.getElementById('chat-contact-phone');
+    const archiveThreadBtn = document.getElementById('archive-thread-btn');
+    const showHiddenToggle = document.getElementById('show-hidden-toggle');
+    const chatAreaEl = document.getElementById('chat-area');
+
     const messageForm = document.getElementById('message-form');
     const messageInput = document.getElementById('message-input');
+    const sendBtn = document.getElementById('send-btn');
+    const composerErrorEl = document.getElementById('composer-error');
+
+    const newChatBtn = document.getElementById('new-chat-btn');
+    const newChatModal = document.getElementById('new-chat-modal');
+    const newChatForm = document.getElementById('new-chat-form');
+    const newChatSelect = document.getElementById('new-chat-contact-select');
+    const newChatPhoneInput = document.getElementById('new-chat-phone');
 
     let activePhone = null;
+    let activeThreadArchived = false;
     let userClosedThread = false;
-    let contactsCache = {};
-    let recentMessagesCache = [];
-    let lastThreadsCache = {};
     let unreadInActiveThread = false;
-
-    let isAlerting = false;
-    let originalTitle = document.title;
-    let alertInterval = null;
-    let scrollTimers = [];
+    let threadStatusTab = 'active';
+    let threadSearchQuery = '';
+    let threadsLimit = 50;
+    let threadsCache = [];
+    let hasMoreMessages = false;
+    let oldestBeforeTs = null;
+    let oldestBeforeId = null;
     let shouldStickToBottom = true;
     let stickTimer = null;
 
+    function showComposerError(msg) {
+        if (!composerErrorEl) return;
+        if (!msg) {
+            composerErrorEl.classList.add('hidden');
+            composerErrorEl.textContent = '';
+            return;
+        }
+        composerErrorEl.textContent = msg;
+        composerErrorEl.classList.remove('hidden');
+    }
+
     function performScroll() {
-        if (!chatArea) return;
-        chatArea.scrollTop = chatArea.scrollHeight + 10000;
-        const lastBubble = chatArea.lastElementChild;
+        if (!chatAreaEl) return;
+        chatAreaEl.scrollTop = chatAreaEl.scrollHeight + 10000;
+        const lastBubble = chatAreaEl.lastElementChild;
         if (lastBubble && typeof lastBubble.scrollIntoView === 'function') {
             lastBubble.scrollIntoView({ block: 'end' });
         }
-        chatArea.scrollTop = chatArea.scrollHeight + 10000;
+        chatAreaEl.scrollTop = chatAreaEl.scrollHeight + 10000;
     }
 
     function scrollToBottom() {
-        if (!chatArea) return;
+        if (!chatAreaEl) return;
         shouldStickToBottom = true;
         if (stickTimer) clearTimeout(stickTimer);
-        stickTimer = setTimeout(() => {
-            shouldStickToBottom = false;
-        }, 500);
-
-        scrollTimers.forEach(id => clearTimeout(id));
-        scrollTimers = [];
+        stickTimer = setTimeout(() => { shouldStickToBottom = false; }, 500);
 
         performScroll();
         requestAnimationFrame(() => {
             performScroll();
             requestAnimationFrame(performScroll);
         });
-        scrollTimers.push(setTimeout(performScroll, 40));
-        scrollTimers.push(setTimeout(performScroll, 120));
-        scrollTimers.push(setTimeout(performScroll, 250));
+        setTimeout(performScroll, 60);
+        setTimeout(performScroll, 180);
     }
 
-    if (chatArea && typeof ResizeObserver !== 'undefined') {
-        const chatResizeObserver = new ResizeObserver(() => {
-            if (shouldStickToBottom) {
-                performScroll();
-            }
+    if (chatAreaEl && typeof ResizeObserver !== 'undefined') {
+        const obs = new ResizeObserver(() => {
+            if (shouldStickToBottom) performScroll();
         });
-        chatResizeObserver.observe(chatArea);
+        obs.observe(chatAreaEl);
     }
 
-    function parseUTCDate(timestamp) {
-        if (!timestamp) return new Date();
-        let ts = timestamp;
-        if (typeof ts === 'string' && !ts.endsWith('Z') && !ts.match(/[\+\-]\d{2}:\d{2}$/)) {
-            ts += 'Z';
-        }
-        return new Date(ts);
-    }
-
-    async function init() {
-        await loadContactsMap();
-        const sortedPhones = await loadThreads();
-        setupEmojiPicker();
-
-        document.body.style.transition = 'box-shadow 0.3s ease-in-out';
-
-        const urlParams = new URLSearchParams(window.location.search);
-        const phoneParam = urlParams.get('phone');
-        if (phoneParam) {
-            await openThread(normalizePhone(phoneParam));
-        } else if (!activePhone && !userClosedThread && sortedPhones && sortedPhones.length > 0) {
-            await openThread(sortedPhones[0]);
-        }
-    }
-
-    async function loadContactsMap() {
+    async function loadThreads(options = { background: false }) {
         try {
-            const res = await fetch('/api/contacts/', { cache: 'no-store' });
-            const contacts = await res.json();
-            contacts.forEach(c => {
-                contactsCache[normalizePhone(c.phone_number)] = c.name;
+            const params = new URLSearchParams({
+                status: threadStatusTab,
+                limit: String(threadsLimit),
+                offset: '0',
             });
-        } catch (err) {
-            console.error('Failed to load contacts map', err);
-        }
-    }
+            if (threadSearchQuery) params.set('q', threadSearchQuery);
 
-    async function loadThreads() {
-        try {
-            const res = await fetch('/api/messages/?limit=500', { cache: 'no-store' });
-            const messages = await res.json();
-            recentMessagesCache = messages;
+            const headers = options.background ? { 'X-Background-Sync': '1' } : {};
+            const res = await apiFetch('/api/threads?' + params.toString(), { cache: 'no-store', headers });
+            if (!res.ok) return [];
+            const data = await res.json();
+            threadsCache = data.items || [];
 
-            const threads = {};
-            messages.forEach(msg => {
-                const contactPhone = getInvolvedPhone(msg);
-                if (!contactPhone) return;
-
-                if (!threads[contactPhone] || parseUTCDate(msg.timestamp) > parseUTCDate(threads[contactPhone].latestMsg.timestamp)) {
-                    threads[contactPhone] = { latestMsg: msg };
-                }
-            });
-
-            lastThreadsCache = threads;
-            const sortedPhones = renderSidebar(threads);
-
-            // Reconcile active thread directly from recentMessagesCache so any message
-            // visible in the sidebar is guaranteed to appear in the chat area too.
-            if (activePhone && chatArea) {
-                const activeCachedMsgs = messages
-                    .filter(m => getInvolvedPhone(m) === activePhone)
-                    .sort((a, b) => parseUTCDate(a.timestamp) - parseUTCDate(b.timestamp));
-
-                let reconciled = false;
-                activeCachedMsgs.forEach(msg => {
-                    const existingBubble = chatArea.querySelector(`[data-internal-id="${msg.id}"]`);
-                    const expectedBodyHash = `${msg.body || ''}::${(msg.attachments || []).length}`;
-                    if (!existingBubble || existingBubble.dataset.bodyHash !== expectedBodyHash) {
-                        if (!chatArea.querySelector('[data-internal-id]') && chatArea.children.length > 0) {
-                            chatArea.innerHTML = '';
-                        }
-                        appendMessageBubble(msg, { animate: !existingBubble, autoScroll: false });
-                        reconciled = true;
-                    }
-                });
-
-                if (reconciled) {
-                    scrollToBottom();
-                }
+            if (window.ClinicNotify) {
+                window.ClinicNotify.setUnreadCount(data.total_unread_active || 0);
             }
-
-            const hasUnread = sortedPhones.some(phone => {
-                const msg = threads[phone].latestMsg;
-                const msgSender = normalizePhone(msg.sender);
-                const isOutbound = msgSender === SYSTEM_PHONE || !msgSender;
-                const suppressActiveUnread = activePhone === phone && !unreadInActiveThread;
-                return !isOutbound && !suppressActiveUnread && (msg.web_viewed === false || msg.web_viewed === 0);
-            });
-            if (!hasUnread) {
-                stopAlert();
+            if (threadsLoadMoreWrap) {
+                threadsLoadMoreWrap.classList.toggle('hidden', !data.has_more);
             }
-
-            return sortedPhones;
+            renderSidebar(threadsCache);
+            return threadsCache;
         } catch (err) {
             console.error('Failed to load threads', err);
             return [];
         }
     }
 
-    function renderSidebar(threads) {
-        const sortedPhones = Object.keys(threads).sort((a, b) => {
-            return parseUTCDate(threads[b].latestMsg.timestamp) - parseUTCDate(threads[a].latestMsg.timestamp);
-        });
+    function renderSidebar(items) {
+        if (!threadListEl) return;
+        threadListEl.textContent = '';
 
-        if (!threadList) return sortedPhones;
-        threadList.innerHTML = '';
-
-        sortedPhones.forEach(phone => {
-            const data = threads[phone];
-            const name = contactsCache[phone] || phone;
-            const previewText = data.latestMsg.body || 'Media message';
-
-            const msgSender = normalizePhone(data.latestMsg.sender);
-            const isOutbound = msgSender === SYSTEM_PHONE || !msgSender;
-            const suppressActiveUnread = activePhone === phone && !unreadInActiveThread;
-            const isUnread = !isOutbound && !suppressActiveUnread && (data.latestMsg.web_viewed === false || data.latestMsg.web_viewed === 0);
-
-            let containerClasses = `p-4 border-b border-gray-100 cursor-pointer transition-colors relative `;
-            if (activePhone === phone) {
-                containerClasses += `bg-blue-50 `;
-            } else if (isUnread) {
-                containerClasses += `bg-red-50 hover:bg-red-100 `;
-            } else {
-                containerClasses += `bg-white hover:bg-gray-50 `;
-            }
-
-            const unreadIndicator = isUnread ? `<span class="absolute top-4 right-4 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse shadow-sm shadow-red-300" title="Unread"></span>` : '';
-
-            const el = document.createElement('div');
-            el.className = containerClasses;
-            el.innerHTML = `
-                <div class="font-bold truncate pr-6 ${isUnread ? 'text-red-900' : 'text-gray-800'}">${name}</div>
-                <div class="text-sm truncate ${isUnread ? 'text-red-700 font-medium' : 'text-gray-500'}">${previewText}</div>
-                ${unreadIndicator}
-            `;
-            el.onclick = () => openThread(phone);
-            threadList.appendChild(el);
-        });
-
-        return sortedPhones;
-    }
-
-    function markActiveThreadRead() {
-        if (!activePhone) return;
-        unreadInActiveThread = false;
-        fetch('/api/messages/mark-read/', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ phone: activePhone })
-        }).then(() => {
-            stopAlert();
-            loadThreads();
-        }).catch(err => console.error('Failed to mark thread as read', err));
-    }
-
-    if (chatArea) {
-        const handleInteraction = () => {
-            if (unreadInActiveThread) {
-                markActiveThreadRead();
-            }
-        };
-        chatArea.addEventListener('mouseenter', handleInteraction);
-        chatArea.addEventListener('mousemove', handleInteraction);
-    }
-
-    function getStatusHtml(msg, isOutbound) {
-        if (!isOutbound) return '';
-        if (msg.is_failed) return `<span class="text-red-300 text-xs ml-2" title="${msg.error_reason || 'Failed'}">❌</span>`;
-        if (msg.is_delivered) return `<span class="text-blue-200 text-xs ml-2" title="Delivered">✓✓</span>`;
-        if (msg.is_sent) return `<span class="text-gray-200 text-xs ml-2" title="Sent">✓</span>`;
-        return `<span class="text-gray-300 text-xs ml-2" title="Sending">...</span>`;
-    }
-
-    async function syncActiveThread(options = { forceScroll: false, forceRender: false }) {
-        const targetPhone = activePhone;
-        if (!targetPhone) return;
-
-        try {
-            const [inbound, outbound] = await Promise.all([
-                fetch(`/api/messages/?sender=${encodeURIComponent(targetPhone)}`, { cache: 'no-store' }).then(r => r.json()),
-                fetch(`/api/messages/?recipient=${encodeURIComponent(targetPhone)}`, { cache: 'no-store' }).then(r => r.json())
-            ]);
-
-            if (activePhone !== targetPhone) return;
-
-            const cachedForTarget = recentMessagesCache.filter(m => getInvolvedPhone(m) === targetPhone);
-            const msgMap = new Map();
-            cachedForTarget.forEach(m => msgMap.set(m.id, m));
-            [...inbound, ...outbound].forEach(m => msgMap.set(m.id, m));
-            const allMessages = Array.from(msgMap.values()).sort((a, b) => parseUTCDate(a.timestamp) - parseUTCDate(b.timestamp));
-
-            if (!chatArea) return;
-
-            if (options.forceRender || !chatArea.querySelector('[data-internal-id]')) {
-                renderChatArea(allMessages);
-                return;
-            }
-
-            let addedOrUpdated = false;
-            allMessages.forEach(msg => {
-                const existingBubble = chatArea.querySelector(`[data-internal-id="${msg.id}"]`);
-                const expectedBodyHash = `${msg.body || ''}::${(msg.attachments || []).length}`;
-                if (!existingBubble || existingBubble.dataset.bodyHash !== expectedBodyHash) {
-                    appendMessageBubble(msg, { animate: !existingBubble, autoScroll: false });
-                    addedOrUpdated = true;
-                } else {
-                    const statusEl = existingBubble.querySelector('.msg-status-indicator');
-                    if (statusEl) {
-                        const msgSender = normalizePhone(msg.sender);
-                        const isOutbound = msgSender === SYSTEM_PHONE || !msgSender;
-                        const nextStatusHtml = getStatusHtml(msg, isOutbound);
-                        if (statusEl.innerHTML !== nextStatusHtml) {
-                            statusEl.innerHTML = nextStatusHtml;
-                            addedOrUpdated = true;
-                        }
-                    }
-                }
-            });
-
-            if (addedOrUpdated || options.forceScroll) {
-                scrollToBottom();
-            }
-        } catch (err) {
-            console.error('Failed to load chat history', err);
-        }
-    }
-
-    async function openThread(phone) {
-        const normalized = normalizePhone(phone);
-        userClosedThread = false;
-        if (chatArea) {
-            chatArea.innerHTML = '';
-        }
-        activePhone = normalized;
-        unreadInActiveThread = false;
-
-        renderSidebar(lastThreadsCache);
-        markActiveThreadRead();
-        await syncActiveThread({ forceScroll: true, forceRender: true });
-    }
-
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') {
-            userClosedThread = true;
-            activePhone = null;
-            unreadInActiveThread = false;
-            stopAlert();
-
-            // Also hide picker if escape is pressed
-            const picker = document.querySelector('emoji-picker');
-            if (picker) picker.classList.add('hidden');
-
-            if (chatArea) {
-                chatArea.innerHTML = `<div class="flex h-full items-center justify-center text-gray-400">No messages yet.</div>`;
-            }
-
-            loadThreads();
-        }
-    });
-
-    function renderChatArea(messages) {
-        if (!chatArea) return;
-        chatArea.innerHTML = '';
-
-        if (messages.length === 0) {
-            chatArea.innerHTML = `<div class="flex h-full items-center justify-center text-gray-400">No messages yet.</div>`;
+        if (!items || items.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'chat-empty-state';
+            empty.style.padding = '28px 16px';
+            empty.textContent = threadStatusTab === 'archived'
+                ? 'No archived conversations.'
+                : 'No conversations found.';
+            threadListEl.appendChild(empty);
             return;
         }
 
-        messages.forEach(msg => appendMessageBubble(msg, { animate: false, autoScroll: false }));
-        scrollToBottom();
+        items.forEach((t) => {
+            const isActive = activePhone === t.contact_phone;
+            const isUnread = (t.unread_count || 0) > 0 && !(isActive && !unreadInActiveThread);
+
+            const item = document.createElement('div');
+            item.className = 'thread-item';
+            if (isActive) item.classList.add('active');
+            else if (isUnread) item.classList.add('unread');
+
+            const topRow = document.createElement('div');
+            topRow.className = 'thread-row-top';
+
+            const nameEl = document.createElement('div');
+            nameEl.className = 'thread-name';
+            nameEl.textContent = t.contact_name || formatPhoneDisplay(t.contact_phone);
+
+            const timeEl = document.createElement('div');
+            timeEl.className = 'thread-time';
+            timeEl.textContent = formatShortTime(t.last_message_at);
+
+            topRow.appendChild(nameEl);
+            topRow.appendChild(timeEl);
+
+            const bottomRow = document.createElement('div');
+            bottomRow.className = 'thread-row-bottom';
+
+            const previewEl = document.createElement('div');
+            previewEl.className = 'thread-preview';
+            previewEl.textContent = t.last_message_preview || 'No messages yet';
+
+            bottomRow.appendChild(previewEl);
+
+            if (isUnread) {
+                const badge = document.createElement('span');
+                badge.className = 'unread-badge';
+                badge.textContent = String(t.unread_count);
+                bottomRow.appendChild(badge);
+            }
+
+            item.appendChild(topRow);
+            item.appendChild(bottomRow);
+            item.addEventListener('click', () => openThread(t.contact_phone));
+            threadListEl.appendChild(item);
+        });
     }
 
-    function appendMessageBubble(msg, options = { animate: true, autoScroll: true }) {
-        if (!chatArea) return;
-        const animate = options.animate !== false;
-        const autoScroll = options.autoScroll !== false;
-        const msgSender = normalizePhone(msg.sender);
-        const isOutbound = msgSender === SYSTEM_PHONE || !msgSender;
+    function createStatusSpan(msg) {
+        const span = document.createElement('span');
+        span.className = 'msg-status-indicator';
+        if (msg.direction !== 'outbound') return span;
 
+        if (msg.is_failed) {
+            span.className += ' msg-status-failed';
+            span.textContent = '❌ Failed';
+            span.title = msg.error_reason || 'Failed to send';
+        } else if (msg.is_cancelled) {
+            span.textContent = 'Cancelled';
+        } else if (msg.is_delivered) {
+            span.textContent = '✓✓';
+            span.title = 'Delivered';
+        } else if (msg.is_sent) {
+            span.textContent = '✓';
+            span.title = 'Sent';
+        } else {
+            span.textContent = '...';
+            span.title = 'Sending';
+        }
+        return span;
+    }
+
+    function buildBubbleNode(msg, animate = false) {
+        const isOutbound = msg.direction === 'outbound';
         const bubble = document.createElement('div');
+        bubble.className = `msg-bubble ${isOutbound ? 'outbound' : 'inbound'}`;
+        if (animate) bubble.classList.add('animate');
+        if (msg.deleted_at) bubble.classList.add('hidden-msg');
+
         bubble.dataset.internalId = msg.id;
-        bubble.dataset.bodyHash = `${msg.body || ''}::${(msg.attachments || []).length}`;
+        bubble.dataset.statusKey = `${msg.status}|${msg.is_sent}|${msg.is_delivered}|${msg.is_failed}|${Boolean(msg.deleted_at)}`;
 
-        bubble.className = `group relative shrink-0 max-w-md p-3 rounded-2xl mb-2 ${animate ? 'chat-bubble-animate ' : ''}${isOutbound ? 'bg-blue-500 text-white self-end ml-auto rounded-br-sm' : 'bg-white border border-gray-200 text-gray-800 self-start mr-auto rounded-bl-sm shadow-sm'}`;
-
-        let contentHtml = '';
-        const hasText = msg.body && msg.body.trim() !== '';
-        const hasMedia = msg.attachments && msg.attachments.length > 0;
+        const hasText = Boolean(msg.body && msg.body.trim() !== '');
+        const hasMedia = Boolean(msg.attachments && msg.attachments.length > 0);
 
         if (hasText) {
-            contentHtml += `<div class="text-sm leading-relaxed pr-6 whitespace-pre-wrap">${msg.body}</div>`;
+            const textEl = document.createElement('div');
+            textEl.className = 'msg-text';
+            textEl.textContent = msg.body;
+            bubble.appendChild(textEl);
         }
 
         if (hasMedia) {
-            msg.attachments.forEach(att => {
-                const contentType = att.content_type || '';
-                const fileUrl = att.filename;
-                const outBoundErrorColor = isOutbound ? 'text-blue-200' : 'text-gray-500';
+            const mediaWrap = document.createElement('div');
+            mediaWrap.className = 'msg-attachments';
 
-                if (contentType.startsWith('image/')) {
-                    contentHtml += `<img src="${fileUrl}" class="max-w-xs rounded mt-2" alt="Image Attachment" onerror="this.outerHTML='<div class=\\'text-sm italic mt-2 ${outBoundErrorColor}\\'>[Image link broken]</div>'" />`;
-                } else if (contentType.startsWith('audio/')) {
-                    contentHtml += `<audio controls src="${fileUrl}" class="mt-2 max-w-xs" onerror="this.outerHTML='<div class=\\'text-sm italic mt-2 ${outBoundErrorColor}\\'>[Audio link broken]</div>'"></audio>`;
-                } else if (contentType.startsWith('video/')) {
-                    contentHtml += `<video controls src="${fileUrl}" class="max-w-xs rounded mt-2" onerror="this.outerHTML='<div class=\\'text-sm italic mt-2 ${outBoundErrorColor}\\'>[Video link broken]</div>'"></video>`;
+            msg.attachments.forEach((att) => {
+                const ct = (att.content_type || '').toLowerCase();
+                if (ct.startsWith('image/')) {
+                    const link = document.createElement('a');
+                    link.href = att.url;
+                    link.target = '_blank';
+                    link.rel = 'noopener noreferrer';
+                    const img = document.createElement('img');
+                    img.src = att.url;
+                    img.alt = att.filename || 'Image attachment';
+                    img.className = 'msg-media-img';
+                    img.addEventListener('load', () => {
+                        if (shouldStickToBottom) scrollToBottom();
+                    });
+                    link.appendChild(img);
+                    mediaWrap.appendChild(link);
+                } else if (ct.startsWith('audio/')) {
+                    const audio = document.createElement('audio');
+                    audio.controls = true;
+                    audio.src = att.url;
+                    audio.className = 'msg-media-audio';
+                    mediaWrap.appendChild(audio);
+                } else if (ct.startsWith('video/')) {
+                    const video = document.createElement('video');
+                    video.controls = true;
+                    video.src = att.url;
+                    video.className = 'msg-media-video';
+                    video.addEventListener('loadedmetadata', () => {
+                        if (shouldStickToBottom) scrollToBottom();
+                    });
+                    mediaWrap.appendChild(video);
                 } else {
-                    const displayName = fileUrl.split('/').pop() || 'Download File';
-                    const linkColor = isOutbound ? 'text-white' : 'text-blue-600';
-                    contentHtml += `<a href="${fileUrl}" target="_blank" rel="noopener noreferrer" class="block mt-2 underline truncate max-w-xs ${linkColor}" title="Download ${displayName}">📎 ${displayName}</a>`;
+                    const link = document.createElement('a');
+                    link.href = att.url;
+                    link.target = '_blank';
+                    link.rel = 'noopener noreferrer';
+                    link.className = 'msg-media-link';
+                    link.textContent = '📎 ' + (att.filename || 'Download attachment');
+                    mediaWrap.appendChild(link);
                 }
             });
+            bubble.appendChild(mediaWrap);
         }
 
         if (!hasText && !hasMedia) {
-            contentHtml = `<div class="text-sm italic ${isOutbound ? 'text-blue-200' : 'text-gray-500'}">[MMS absent]</div>`;
+            const emptyEl = document.createElement('div');
+            emptyEl.className = 'msg-absent';
+            emptyEl.textContent = '[MMS attachment absent]';
+            bubble.appendChild(emptyEl);
         }
 
-        const statusHtml = `<span class="msg-status-indicator">${getStatusHtml(msg, isOutbound)}</span>`;
+        // Metadata footer (Sender display name for v3 outbound, timestamp, status)
+        const meta = document.createElement('div');
+        meta.className = 'msg-meta';
+        const parts = [];
+        if (isOutbound && msg.sent_by_display_name) {
+            parts.push(msg.sent_by_display_name);
+        }
+        parts.push(formatShortTime(msg.timestamp));
+        if (msg.deleted_at) {
+            parts.push('[Hidden]');
+        }
+        const metaText = document.createElement('span');
+        metaText.textContent = parts.join(' · ');
+        meta.appendChild(metaText);
+        meta.appendChild(createStatusSpan(msg));
+        bubble.appendChild(meta);
 
-        const formattedDate = parseUTCDate(msg.timestamp).toLocaleString([], {
-            month: 'short',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit'
-        });
+        // Hover actions (Copy + Hide / Restore)
+        const actions = document.createElement('div');
+        actions.className = 'msg-actions';
 
-        bubble.innerHTML = `
-            ${contentHtml}
-            <div class="text-right text-[10px] mt-1 ${isOutbound ? 'text-blue-100' : 'text-gray-400'}">
-                ${formattedDate}
-                ${statusHtml}
-            </div>
-        `;
-
-        bubble.querySelectorAll('img, video').forEach(mediaEl => {
-            mediaEl.addEventListener('load', scrollToBottom);
-            mediaEl.addEventListener('loadedmetadata', scrollToBottom);
-        });
-
-        if (hasText) {
+        if (hasText && navigator.clipboard) {
             const copyBtn = document.createElement('button');
-            copyBtn.className = `opacity-0 group-hover:opacity-100 transition-opacity absolute top-2 right-2 p-1.5 rounded-md shadow-sm z-10 flex items-center justify-center ${isOutbound ? 'bg-blue-600 text-blue-100 hover:bg-blue-700 hover:text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-700'}`;
-            copyBtn.title = "Copy text";
-            copyBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>`;
-            copyBtn.onclick = () => {
+            copyBtn.type = 'button';
+            copyBtn.className = 'msg-action-btn';
+            copyBtn.textContent = 'Copy';
+            copyBtn.addEventListener('click', () => {
                 navigator.clipboard.writeText(msg.body).then(() => {
-                    const origHtml = copyBtn.innerHTML;
-                    copyBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>`;
-                    setTimeout(() => copyBtn.innerHTML = origHtml, 2000);
-                }).catch(err => console.error('Failed to copy text', err));
-            };
-            bubble.appendChild(copyBtn);
+                    copyBtn.textContent = 'Copied!';
+                    setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1800);
+                }).catch(() => {});
+            });
+            actions.appendChild(copyBtn);
         }
 
-        const existingBubble = chatArea.querySelector(`[data-internal-id="${msg.id}"]`);
-        if (existingBubble) {
-            if (typeof existingBubble.replaceWith === 'function') {
-                existingBubble.replaceWith(bubble);
-            } else {
-                chatArea.replaceChild(bubble, existingBubble);
-            }
-        } else {
-            chatArea.appendChild(bubble);
+        if (!msg.deleted_at) {
+            const hideBtn = document.createElement('button');
+            hideBtn.type = 'button';
+            hideBtn.className = 'msg-action-btn';
+            hideBtn.textContent = 'Hide';
+            hideBtn.addEventListener('click', async () => {
+                if (!confirm('Hide this message from the conversation view? It remains preserved in the database.')) return;
+                const res = await apiFetch(`/api/messages/${encodeURIComponent(msg.id)}/hide`, { method: 'POST' });
+                if (res.ok) {
+                    bubble.remove();
+                    loadThreads({ background: true });
+                }
+            });
+            actions.appendChild(hideBtn);
+        } else if (isAdmin) {
+            const restoreBtn = document.createElement('button');
+            restoreBtn.type = 'button';
+            restoreBtn.className = 'msg-action-btn';
+            restoreBtn.textContent = 'Restore';
+            restoreBtn.addEventListener('click', async () => {
+                const res = await apiFetch(`/api/messages/${encodeURIComponent(msg.id)}/restore`, { method: 'POST' });
+                if (res.ok) {
+                    syncActiveThread({ forceRender: true, forceScroll: false, background: false });
+                    loadThreads({ background: true });
+                }
+            });
+            actions.appendChild(restoreBtn);
         }
-        if (autoScroll) {
+
+        bubble.appendChild(actions);
+        return bubble;
+    }
+
+    function updateChatHeader(threadMeta) {
+        if (!chatHeaderEl || !threadMeta) return;
+        chatHeaderEl.classList.remove('hidden');
+        chatContactNameEl.textContent = threadMeta.contact_name || threadMeta.display_phone || threadMeta.contact_phone;
+        chatContactPhoneEl.textContent = threadMeta.contact_name ? (threadMeta.display_phone || threadMeta.contact_phone) : '';
+        activeThreadArchived = Boolean(threadMeta.archived_at);
+        if (archiveThreadBtn) {
+            archiveThreadBtn.textContent = activeThreadArchived ? 'Unarchive' : 'Archive';
+        }
+    }
+
+    function renderChatArea(messages) {
+        if (!chatAreaEl) return;
+        chatAreaEl.textContent = '';
+
+        if (hasMoreMessages) {
+            const wrap = document.createElement('div');
+            wrap.className = 'load-older-wrap';
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn btn-secondary btn-sm';
+            btn.textContent = 'Load older messages';
+            btn.addEventListener('click', loadOlderMessages);
+            wrap.appendChild(btn);
+            chatAreaEl.appendChild(wrap);
+        }
+
+        if (!messages || messages.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'chat-empty-state';
+            empty.textContent = 'No messages in this conversation yet.';
+            chatAreaEl.appendChild(empty);
+            return;
+        }
+
+        messages.forEach((msg) => chatAreaEl.appendChild(buildBubbleNode(msg, false)));
+        scrollToBottom();
+    }
+
+    async function loadOlderMessages() {
+        if (!activePhone || !oldestBeforeTs) return;
+        const prevHeight = chatAreaEl.scrollHeight;
+        const prevTop = chatAreaEl.scrollTop;
+
+        const params = new URLSearchParams({
+            limit: '50',
+            before_ts: oldestBeforeTs,
+            include_hidden: showHiddenToggle && showHiddenToggle.checked ? 'true' : 'false',
+        });
+        if (oldestBeforeId) params.set('before_id', oldestBeforeId);
+
+        const res = await apiFetch(`/api/threads/${encodeURIComponent(activePhone)}/messages?` + params.toString());
+        if (!res.ok) return;
+        const data = await res.json();
+
+        hasMoreMessages = Boolean(data.has_more);
+        oldestBeforeTs = data.next_before_ts || null;
+        oldestBeforeId = data.next_before_id || null;
+
+        const existingWrap = chatAreaEl.querySelector('.load-older-wrap');
+        if (existingWrap) existingWrap.remove();
+
+        const frag = document.createDocumentFragment();
+        if (hasMoreMessages) {
+            const wrap = document.createElement('div');
+            wrap.className = 'load-older-wrap';
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn btn-secondary btn-sm';
+            btn.textContent = 'Load older messages';
+            btn.addEventListener('click', loadOlderMessages);
+            wrap.appendChild(btn);
+            frag.appendChild(wrap);
+        }
+        (data.items || []).forEach((msg) => {
+            if (!chatAreaEl.querySelector(`[data-internal-id="${msg.id}"]`)) {
+                frag.appendChild(buildBubbleNode(msg, false));
+            }
+        });
+        chatAreaEl.insertBefore(frag, chatAreaEl.firstChild);
+
+        const newHeight = chatAreaEl.scrollHeight;
+        chatAreaEl.scrollTop = prevTop + (newHeight - prevHeight);
+    }
+
+    async function syncActiveThread(options = { forceRender: false, forceScroll: false, background: false }) {
+        const target = activePhone;
+        if (!target) return;
+
+        const params = new URLSearchParams({
+            limit: '50',
+            include_hidden: showHiddenToggle && showHiddenToggle.checked ? 'true' : 'false',
+        });
+        const headers = options.background ? { 'X-Background-Sync': '1' } : {};
+        const res = await apiFetch(`/api/threads/${encodeURIComponent(target)}/messages?` + params.toString(), {
+            cache: 'no-store',
+            headers,
+        });
+        if (!res.ok || activePhone !== target) return;
+        const data = await res.json();
+
+        updateChatHeader(data.thread);
+
+        if (options.forceRender || !chatAreaEl.querySelector('[data-internal-id]')) {
+            hasMoreMessages = Boolean(data.has_more);
+            oldestBeforeTs = data.next_before_ts || null;
+            oldestBeforeId = data.next_before_id || null;
+            renderChatArea(data.items || []);
+            return;
+        }
+
+        let changed = false;
+        (data.items || []).forEach((msg) => {
+            const existing = chatAreaEl.querySelector(`[data-internal-id="${msg.id}"]`);
+            const nextKey = `${msg.status}|${msg.is_sent}|${msg.is_delivered}|${msg.is_failed}|${Boolean(msg.deleted_at)}`;
+            if (!existing) {
+                const emptyState = chatAreaEl.querySelector('.chat-empty-state');
+                if (emptyState) emptyState.remove();
+                chatAreaEl.appendChild(buildBubbleNode(msg, true));
+                changed = true;
+            } else if (existing.dataset.statusKey !== nextKey) {
+                existing.replaceWith(buildBubbleNode(msg, false));
+                changed = true;
+            }
+        });
+
+        if (changed || options.forceScroll) {
             scrollToBottom();
         }
     }
 
+    async function markActiveThreadRead() {
+        if (!activePhone) return;
+        unreadInActiveThread = false;
+        try {
+            await apiFetch(`/api/threads/${encodeURIComponent(activePhone)}/mark-read`, { method: 'POST' });
+            await loadThreads({ background: true });
+        } catch (_err) {
+            // Handled
+        }
+    }
+
+    async function openThread(phone) {
+        const canonical = normalizePhone(phone);
+        if (!canonical) return;
+        userClosedThread = false;
+        activePhone = canonical;
+        unreadInActiveThread = false;
+        showComposerError('');
+        renderSidebar(threadsCache);
+        await syncActiveThread({ forceRender: true, forceScroll: true, background: false });
+        await markActiveThreadRead();
+    }
+
+    if (chatAreaEl) {
+        const onInteract = () => {
+            if (unreadInActiveThread) markActiveThreadRead();
+        };
+        chatAreaEl.addEventListener('mouseenter', onInteract);
+        chatAreaEl.addEventListener('mousemove', onInteract);
+    }
+
+    if (archiveThreadBtn) {
+        archiveThreadBtn.addEventListener('click', async () => {
+            if (!activePhone) return;
+            const action = activeThreadArchived ? 'unarchive' : 'archive';
+            const res = await apiFetch(`/api/threads/${encodeURIComponent(activePhone)}/${action}`, { method: 'POST' });
+            if (res.ok) {
+                activeThreadArchived = !activeThreadArchived;
+                archiveThreadBtn.textContent = activeThreadArchived ? 'Unarchive' : 'Archive';
+                await loadThreads();
+            }
+        });
+    }
+
+    if (showHiddenToggle) {
+        showHiddenToggle.addEventListener('change', () => {
+            if (activePhone) syncActiveThread({ forceRender: true, forceScroll: false, background: false });
+        });
+    }
+
+    if (tabInboxBtn && tabArchivedBtn) {
+        tabInboxBtn.addEventListener('click', () => {
+            threadStatusTab = 'active';
+            threadsLimit = 50;
+            tabInboxBtn.classList.add('active');
+            tabArchivedBtn.classList.remove('active');
+            loadThreads();
+        });
+        tabArchivedBtn.addEventListener('click', () => {
+            threadStatusTab = 'archived';
+            threadsLimit = 50;
+            tabArchivedBtn.classList.add('active');
+            tabInboxBtn.classList.remove('active');
+            loadThreads();
+        });
+    }
+
+    if (threadSearchEl) {
+        let searchTimer = null;
+        threadSearchEl.addEventListener('input', () => {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(() => {
+                threadSearchQuery = threadSearchEl.value.trim();
+                threadsLimit = 50;
+                loadThreads();
+            }, 300);
+        });
+    }
+
+    if (threadsLoadMoreBtn) {
+        threadsLoadMoreBtn.addEventListener('click', () => {
+            threadsLimit += 50;
+            loadThreads();
+        });
+    }
+
+    // Composer: Enter sends, Shift+Enter newline; NEVER clear draft if send fails!
     if (messageForm && messageInput) {
         messageInput.addEventListener('input', function () {
             this.style.height = 'auto';
-            this.style.height = (this.scrollHeight) + 'px';
-            if (this.value === '') this.style.height = '44px';
+            this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+            if (this.value === '') this.style.height = '46px';
         });
 
         messageInput.addEventListener('keydown', (e) => {
@@ -475,167 +617,222 @@ document.addEventListener('DOMContentLoaded', () => {
 
         messageForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            if (!activePhone) return alert("Select a thread first!");
-
+            showComposerError('');
+            if (!activePhone) {
+                showComposerError('Please select a conversation first, or click "+ New".');
+                return;
+            }
             const body = messageInput.value.trim();
             if (!body) return;
 
-            messageInput.value = '';
-            messageInput.style.height = '44px';
-
+            sendBtn.disabled = true;
+            sendBtn.textContent = 'Sending...';
             try {
-                const res = await fetch('/api/messages/', {
+                const res = await apiFetch('/api/messages/', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ recipient: activePhone, body: body })
+                    body: JSON.stringify({ recipient: activePhone, body }),
                 });
-
                 if (res.ok) {
                     const newMsg = await res.json();
-                    if (!chatArea.querySelector('[data-internal-id]') && chatArea.children.length > 0) {
-                        chatArea.innerHTML = '';
-                    }
-                    if (!chatArea.querySelector(`[data-internal-id="${newMsg.id}"]`)) {
-                        appendMessageBubble(newMsg);
+                    messageInput.value = '';
+                    messageInput.style.height = '46px';
+                    const emptyState = chatAreaEl.querySelector('.chat-empty-state');
+                    if (emptyState) emptyState.remove();
+                    if (!chatAreaEl.querySelector(`[data-internal-id="${newMsg.id}"]`)) {
+                        chatAreaEl.appendChild(buildBubbleNode(newMsg, true));
                     }
                     scrollToBottom();
-                    stopAlert();
-                    loadThreads();
+                    window.dispatchEvent(new CustomEvent('app:message_sent'));
+                    await loadThreads({ background: true });
+                } else {
+                    const errData = await res.json().catch(() => ({}));
+                    showComposerError(errData.detail || 'Message could not be sent. Your text was kept.');
                 }
-            } catch (err) {
-                console.error('Send failed', err);
+            } catch (_err) {
+                showComposerError('Network error sending message. Your text was kept.');
+            } finally {
+                sendBtn.disabled = false;
+                sendBtn.textContent = 'Send';
             }
         });
     }
 
-    function setupEmojiPicker() {
-        const picker = document.querySelector('emoji-picker');
-        const toggleBtn = document.getElementById('emoji-toggle-btn');
-        if (!picker || !messageInput) return;
+    // + New Chat Modal
+    if (newChatBtn && newChatModal) {
+        newChatBtn.addEventListener('click', async () => {
+            newChatModal.classList.remove('hidden');
+            newChatPhoneInput.value = '';
+            try {
+                const res = await apiFetch('/api/contacts/');
+                if (res.ok) {
+                    const contacts = await res.json();
+                    newChatSelect.textContent = '';
+                    const defOpt = document.createElement('option');
+                    defOpt.value = '';
+                    defOpt.textContent = '-- Select a saved contact --';
+                    newChatSelect.appendChild(defOpt);
+                    contacts.forEach((c) => {
+                        const opt = document.createElement('option');
+                        opt.value = c.phone_number;
+                        opt.textContent = `${c.name} (${c.display_phone || c.phone_number})`;
+                        newChatSelect.appendChild(opt);
+                    });
+                }
+            } catch (_e) {}
+            newChatPhoneInput.focus();
+        });
 
-        // Toggle the picker when clicking the smiley button
-        if (toggleBtn) {
-            toggleBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                picker.classList.toggle('hidden');
-            });
-        }
+        newChatSelect.addEventListener('change', () => {
+            if (newChatSelect.value) {
+                newChatPhoneInput.value = newChatSelect.value;
+            }
+        });
 
-        // Insert emoji and auto-resize
-        picker.addEventListener('emoji-click', event => {
-            const emoji = event.detail.unicode;
-            const start = messageInput.selectionStart;
-            const end = messageInput.selectionEnd;
-            const text = messageInput.value;
-
-            messageInput.value = text.slice(0, start) + emoji + text.slice(end);
+        newChatForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const phone = normalizePhone(newChatPhoneInput.value);
+            if (!phone || phone === 'unknown') return;
+            newChatModal.classList.add('hidden');
+            await openThread(phone);
             messageInput.focus();
-            messageInput.selectionStart = messageInput.selectionEnd = start + emoji.length;
-
-            messageInput.dispatchEvent(new Event('input'));
         });
+    }
 
-        // Hide the picker when clicking outside of it
-        document.addEventListener('click', (e) => {
-            if (toggleBtn && !picker.contains(e.target) && !toggleBtn.contains(e.target)) {
+    // Escape closes active thread & emoji picker (preserving v2 shortcut)
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            const picker = document.getElementById('emoji-picker-panel');
+            if (picker && !picker.classList.contains('hidden')) {
                 picker.classList.add('hidden');
+                return;
             }
-        });
-    }
-
-    function startAlert() {
-        if (isAlerting) return;
-        isAlerting = true;
-        let showDot = false;
-
-        alertInterval = setInterval(() => {
-            document.title = showDot ? "🔴 New Message! - Messaging Center!" : originalTitle;
-            document.body.style.boxShadow = showDot ? 'inset 0 0 50px 20px rgba(255, 0, 0, 0.7)' : 'none';
-            showDot = !showDot;
-        }, 800);
-    }
-
-    function stopAlert() {
-        isAlerting = false;
-        clearInterval(alertInterval);
-        document.title = originalTitle;
-        document.body.style.boxShadow = 'none';
-    }
-
-    window.addEventListener('sse:new_message', (e) => {
-        const msg = e.detail;
-
-        const normSender = normalizePhone(msg.sender);
-        const involvedPhone = getInvolvedPhone(msg);
-        const isInbound = Boolean(normSender && normSender !== SYSTEM_PHONE);
-
-        if (activePhone === involvedPhone && involvedPhone !== null) {
-            if (chatArea && !chatArea.querySelector('[data-internal-id]') && chatArea.children.length > 0) {
-                chatArea.innerHTML = '';
+            const openModal = document.querySelector('.modal-backdrop:not(.hidden)');
+            if (openModal && openModal.id !== 'timeout-modal') {
+                openModal.classList.add('hidden');
+                return;
             }
-            appendMessageBubble(msg, { animate: true, autoScroll: true });
-            scrollToBottom();
+            userClosedThread = true;
+            activePhone = null;
+            unreadInActiveThread = false;
+            if (chatHeaderEl) chatHeaderEl.classList.add('hidden');
+            if (chatAreaEl) {
+                chatAreaEl.textContent = '';
+                const empty = document.createElement('div');
+                empty.className = 'chat-empty-state';
+                empty.textContent = 'Select a conversation on the left, or click + New to start one.';
+                chatAreaEl.appendChild(empty);
+            }
+            renderSidebar(threadsCache);
+        }
+    });
 
+    // Real-time SSE handlers
+    window.addEventListener('sse:message_created', (e) => {
+        const data = e.detail || {};
+        const msg = data.message;
+        if (!msg) return;
+
+        const isInbound = msg.direction === 'inbound';
+        if (activePhone === msg.contact_phone) {
+            const emptyState = chatAreaEl.querySelector('.chat-empty-state');
+            if (emptyState) emptyState.remove();
+            if (!chatAreaEl.querySelector(`[data-internal-id="${msg.id}"]`)) {
+                chatAreaEl.appendChild(buildBubbleNode(msg, true));
+                scrollToBottom();
+            }
             if (isInbound) {
                 if (document.visibilityState === 'visible') {
                     markActiveThreadRead();
                 } else {
                     unreadInActiveThread = true;
-                    startAlert();
+                    if (window.ClinicNotify) window.ClinicNotify.notifyNewInboundMessage();
                 }
             }
-        } else if (!activePhone && !userClosedThread && involvedPhone !== null) {
-            openThread(involvedPhone);
-        } else if (isInbound) {
-            startAlert();
+        } else {
+            if (!activePhone && !userClosedThread && msg.contact_phone) {
+                openThread(msg.contact_phone);
+            }
+            if (isInbound && window.ClinicNotify) {
+                window.ClinicNotify.notifyNewInboundMessage();
+            }
         }
-
-        loadThreads();
+        loadThreads({ background: true });
     });
 
-    window.addEventListener('sse:status_update', () => {
-        if (activePhone) {
-            syncActiveThread({ forceScroll: true });
+    window.addEventListener('sse:message_status_updated', (e) => {
+        const data = e.detail || {};
+        if (activePhone && data.contact_phone === activePhone) {
+            syncActiveThread({ forceRender: false, forceScroll: false, background: true });
         }
+    });
+
+    window.addEventListener('sse:message_hidden', (e) => {
+        const data = e.detail || {};
+        if (activePhone && data.contact_phone === activePhone) {
+            syncActiveThread({ forceRender: true, forceScroll: false, background: true });
+        }
+        loadThreads({ background: true });
+    });
+
+    window.addEventListener('sse:message_restored', (e) => {
+        const data = e.detail || {};
+        if (activePhone && data.message && data.message.contact_phone === activePhone) {
+            syncActiveThread({ forceRender: true, forceScroll: false, background: true });
+        }
+        loadThreads({ background: true });
     });
 
     window.addEventListener('sse:thread_read', (e) => {
-        if (e.detail && normalizePhone(e.detail.phone) === activePhone) {
+        const data = e.detail || {};
+        if (data.contact_phone === activePhone) {
             unreadInActiveThread = false;
         }
-        loadThreads();
+        loadThreads({ background: true });
+    });
+
+    window.addEventListener('sse:thread_updated', () => {
+        loadThreads({ background: true });
+        if (activePhone) syncActiveThread({ forceRender: false, forceScroll: false, background: true });
+    });
+
+    window.addEventListener('sse:contact_updated', () => {
+        loadThreads({ background: true });
+        if (activePhone) syncActiveThread({ forceRender: false, forceScroll: false, background: true });
     });
 
     window.addEventListener('sse:reconnected', () => {
-        loadThreads();
-        if (activePhone) {
-            syncActiveThread({ forceScroll: false });
-        }
+        loadThreads({ background: true });
+        if (activePhone) syncActiveThread({ forceRender: false, forceScroll: false, background: true });
     });
 
     function handleReturnToApp() {
-        if (unreadInActiveThread) {
-            markActiveThreadRead();
-        }
-        loadThreads();
-        if (activePhone) {
-            syncActiveThread({ forceScroll: false });
-        }
+        if (unreadInActiveThread) markActiveThreadRead();
+        loadThreads({ background: true });
+        if (activePhone) syncActiveThread({ forceRender: false, forceScroll: false, background: true });
     }
 
     window.addEventListener('focus', handleReturnToApp);
     document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') {
-            handleReturnToApp();
-        }
+        if (document.visibilityState === 'visible') handleReturnToApp();
     });
 
+    // Gentle 30s background reconciliation (X-Background-Sync: 1 so it NEVER resets idle timer)
     setInterval(() => {
-        loadThreads();
-        if (activePhone) {
-            syncActiveThread({ forceScroll: false });
-        }
+        loadThreads({ background: true });
+        if (activePhone) syncActiveThread({ forceRender: false, forceScroll: false, background: true });
     }, 30000);
+
+    async function init() {
+        const items = await loadThreads({ background: false });
+        const urlParams = new URLSearchParams(window.location.search);
+        const phoneParam = urlParams.get('phone');
+        if (phoneParam) {
+            await openThread(normalizePhone(phoneParam));
+        } else if (!activePhone && !userClosedThread && items && items.length > 0) {
+            await openThread(items[0].contact_phone);
+        }
+    }
 
     init();
 });
