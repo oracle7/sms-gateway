@@ -169,6 +169,20 @@ class AdminResetPasswordRequest(BaseModel):
     must_change_password: bool = True
 
 
+class AdminSessionPublic(BaseModel):
+    id: str
+    user_id: int
+    username: str
+    display_name: str
+    role: Literal["admin", "staff"]
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    created_at: datetime
+    last_activity_at: datetime
+    expires_at: datetime
+    is_current: bool = False
+
+
 class AuditLogResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

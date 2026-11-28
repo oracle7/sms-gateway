@@ -137,3 +137,60 @@ def test_concurrent_sessions_and_optional_idle_timeout(isolated_env, monkeypatch
 
     expired_resp = c2.get("/api/threads")
     assert expired_resp.status_code == 401
+
+
+def test_admin_edit_user_and_revoke_sessions(isolated_env):
+    admin_client, admin_csrf = login_client("doctor", "DoctorPass1234!")
+    users = admin_client.get("/api/admin/users").json()
+    doc_id = next(u["id"] for u in users if u["username"] == "doctor")
+    lori_id = next(u["id"] for u in users if u["username"] == "lori")
+
+    # Edit Lori's display name
+    edit_res = admin_client.patch(
+        f"/api/admin/users/{lori_id}",
+        headers={"X-CSRF-Token": admin_csrf},
+        json={"display_name": "Lori M."},
+    )
+    assert edit_res.status_code == 200
+    assert edit_res.json()["display_name"] == "Lori M."
+
+    # Cannot demote the last active admin
+    demote_res = admin_client.patch(
+        f"/api/admin/users/{doc_id}",
+        headers={"X-CSRF-Token": admin_csrf},
+        json={"role": "staff"},
+    )
+    assert demote_res.status_code == 400
+
+    # Lori signs in on 2 separate browsers
+    lori1, _ = login_client("lori", "LoriStaffPass1234!")
+    lori2, _ = login_client("lori", "LoriStaffPass1234!")
+
+    all_sessions = admin_client.get("/api/admin/sessions").json()
+    lori_sessions = [s for s in all_sessions if s["user_id"] == lori_id]
+    assert len(lori_sessions) == 2
+
+    # Revoke one specific session
+    revoke_one = admin_client.post(
+        f"/api/admin/sessions/{lori_sessions[0]['id']}/revoke",
+        headers={"X-CSRF-Token": admin_csrf},
+    )
+    assert revoke_one.status_code == 200
+
+    statuses_after_one = sorted([lori1.get("/api/threads").status_code, lori2.get("/api/threads").status_code])
+    assert statuses_after_one == [200, 401]
+
+    # Sign out all remaining sessions for Lori
+    sign_out_all = admin_client.post(
+        f"/api/admin/users/{lori_id}/sign-out",
+        headers={"X-CSRF-Token": admin_csrf},
+    )
+    assert sign_out_all.status_code == 200
+    assert sign_out_all.json()["revoked_sessions"] == 1
+    assert lori1.get("/api/threads").status_code == 401
+    assert lori2.get("/api/threads").status_code == 401
+
+    # Audit chain remains valid
+    verify = admin_client.get("/api/admin/audit-logs/verify-chain")
+    assert verify.status_code == 200
+    assert verify.json()["valid"] is True

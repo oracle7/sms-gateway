@@ -9,6 +9,7 @@ from database import get_db, utc_now
 from models import AuditLog, User, UserSession
 from schemas import (
     AdminResetPasswordRequest,
+    AdminSessionPublic,
     AdminUserCreate,
     AdminUserUpdate,
     AuditChainVerifyResponse,
@@ -230,6 +231,105 @@ def unlock_user(
     )
     db.commit()
     return {"status": "unlocked", "username": target.username}
+
+
+@router.post("/users/{user_id}/sign-out")
+async def sign_out_user(
+    user_id: int,
+    request: Request,
+    auth: AuthContext = Depends(require_admin_csrf),
+    db: Session = Depends(get_db),
+):
+    """Revokes all active sessions for the specified user."""
+    target = db.query(User).filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+    revoked_ids = _revoke_user_sessions(db, target.id, "admin_revoked")
+    record_audit(
+        db,
+        action="admin.session_revoked",
+        resource_type="user",
+        resource_id=str(target.id),
+        actor_user=auth.user,
+        ip_address=extract_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        metadata={"target_username": target.username, "revoked_sessions": len(revoked_ids)},
+        commit=False,
+    )
+    db.commit()
+
+    for sid in revoked_ids:
+        await broadcaster.disconnect_session(sid, reason="admin_revoked")
+
+    return {"status": "signed_out", "revoked_sessions": len(revoked_ids)}
+
+
+@router.get("/sessions", response_model=List[AdminSessionPublic])
+def list_active_sessions(
+    auth: AuthContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Lists all non-revoked, non-expired sessions across all users."""
+    now = utc_now()
+    rows = (
+        db.query(UserSession, User)
+        .join(User, User.id == UserSession.user_id)
+        .filter(UserSession.revoked_at.is_(None), UserSession.expires_at > now)
+        .order_by(UserSession.last_activity_at.desc())
+        .all()
+    )
+    return [
+        AdminSessionPublic(
+            id=sess.id,
+            user_id=user.id,
+            username=user.username,
+            display_name=user.display_name,
+            role=user.role,
+            ip_address=sess.ip_address,
+            user_agent=sess.user_agent,
+            created_at=sess.created_at,
+            last_activity_at=sess.last_activity_at,
+            expires_at=sess.expires_at,
+            is_current=(sess.id == auth.session.id),
+        )
+        for sess, user in rows
+    ]
+
+
+@router.post("/sessions/{session_id}/revoke")
+async def revoke_session(
+    session_id: str,
+    request: Request,
+    auth: AuthContext = Depends(require_admin_csrf),
+    db: Session = Depends(get_db),
+):
+    """Revokes a single active session by ID."""
+    sess = (
+        db.query(UserSession)
+        .filter(UserSession.id == session_id, UserSession.revoked_at.is_(None))
+        .first()
+    )
+    if not sess:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Active session not found.")
+
+    sess.revoked_at = utc_now()
+    sess.revoked_reason = "admin_revoked"
+    record_audit(
+        db,
+        action="admin.session_revoked",
+        resource_type="session",
+        resource_id=sess.id,
+        actor_user=auth.user,
+        ip_address=extract_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        metadata={"target_user_id": sess.user_id},
+        commit=False,
+    )
+    db.commit()
+
+    await broadcaster.disconnect_session(sess.id, reason="admin_revoked")
+    return {"status": "revoked", "session_id": sess.id}
 
 
 def _build_audit_query(

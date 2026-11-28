@@ -1,13 +1,15 @@
 /**
  * admin.js
- * User administration and HIPAA immutable audit log viewer/exporter.
+ * User administration, active session control, and HIPAA immutable audit log viewer/exporter.
  */
 document.addEventListener('DOMContentLoaded', () => {
     const { apiFetch } = window.ClinicApi;
 
     const tabUsersBtn = document.getElementById('admin-tab-users');
+    const tabSessionsBtn = document.getElementById('admin-tab-sessions');
     const tabAuditBtn = document.getElementById('admin-tab-audit');
     const usersSection = document.getElementById('admin-users-section');
+    const sessionsSection = document.getElementById('admin-sessions-section');
     const auditSection = document.getElementById('admin-audit-section');
 
     const usersBody = document.getElementById('users-table-body');
@@ -16,11 +18,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const addUserForm = document.getElementById('add-user-form');
     const addUserErr = document.getElementById('add-user-error');
 
+    const editUserModal = document.getElementById('edit-user-modal');
+    const editUserForm = document.getElementById('edit-user-form');
+    const editUserErr = document.getElementById('edit-user-error');
+    const editUserLabel = document.getElementById('edit-user-username-label');
+    const editDisplayInput = document.getElementById('eu-display');
+    const editRoleSelect = document.getElementById('eu-role');
+    let editTargetUserId = null;
+
     const resetPwModal = document.getElementById('reset-pw-modal');
     const resetPwForm = document.getElementById('reset-pw-form');
     const resetPwErr = document.getElementById('reset-pw-error');
     const resetPwLabel = document.getElementById('reset-pw-target-label');
     let resetTargetUserId = null;
+
+    const sessionsBody = document.getElementById('sessions-table-body');
+    const sessionsRefreshBtn = document.getElementById('sessions-refresh-btn');
 
     const auditBody = document.getElementById('audit-table-body');
     const auditFilterUser = document.getElementById('audit-filter-user');
@@ -37,15 +50,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function switchTab(tab) {
         const isUsers = tab === 'users';
+        const isSessions = tab === 'sessions';
+        const isAudit = tab === 'audit';
+
         usersSection.classList.toggle('hidden', !isUsers);
-        auditSection.classList.toggle('hidden', isUsers);
+        sessionsSection.classList.toggle('hidden', !isSessions);
+        auditSection.classList.toggle('hidden', !isAudit);
+
         tabUsersBtn.className = isUsers ? 'btn btn-primary' : 'btn btn-secondary';
-        tabAuditBtn.className = isUsers ? 'btn btn-secondary' : 'btn btn-primary';
+        tabSessionsBtn.className = isSessions ? 'btn btn-primary' : 'btn btn-secondary';
+        tabAuditBtn.className = isAudit ? 'btn btn-primary' : 'btn btn-secondary';
+
         if (isUsers) loadUsers();
+        else if (isSessions) loadSessions();
         else loadAuditLogs();
     }
 
     tabUsersBtn.addEventListener('click', () => switchTab('users'));
+    tabSessionsBtn.addEventListener('click', () => switchTab('sessions'));
     tabAuditBtn.addEventListener('click', () => switchTab('audit'));
 
     async function loadUsers() {
@@ -88,6 +110,21 @@ document.addEventListener('DOMContentLoaded', () => {
             const wrap = document.createElement('div');
             wrap.className = 'table-actions';
 
+            const editBtn = document.createElement('button');
+            editBtn.type = 'button';
+            editBtn.className = 'btn btn-secondary btn-sm';
+            editBtn.textContent = 'Edit';
+            editBtn.addEventListener('click', () => {
+                editTargetUserId = u.id;
+                editUserLabel.textContent = `Username: ${u.username}`;
+                editDisplayInput.value = u.display_name;
+                editRoleSelect.value = u.role;
+                editUserErr.classList.add('hidden');
+                editUserModal.classList.remove('hidden');
+                editDisplayInput.focus();
+            });
+            wrap.appendChild(editBtn);
+
             const resetBtn = document.createElement('button');
             resetBtn.type = 'button';
             resetBtn.className = 'btn btn-secondary btn-sm';
@@ -100,6 +137,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 resetPwModal.classList.remove('hidden');
             });
             wrap.appendChild(resetBtn);
+
+            const signOutBtn = document.createElement('button');
+            signOutBtn.type = 'button';
+            signOutBtn.className = 'btn btn-secondary btn-sm';
+            signOutBtn.textContent = 'Sign Out';
+            signOutBtn.addEventListener('click', async () => {
+                if (!confirm(`Sign out all active browser sessions for "${u.display_name}"?`)) return;
+                const r = await apiFetch(`/api/admin/users/${u.id}/sign-out`, { method: 'POST' });
+                if (r.ok) {
+                    const data = await r.json();
+                    alert(`Signed out ${data.revoked_sessions} active session(s) for ${u.display_name}.`);
+                }
+            });
+            wrap.appendChild(signOutBtn);
 
             if (u.locked_until && Date.parse(u.locked_until) > Date.now()) {
                 const unlockBtn = document.createElement('button');
@@ -143,6 +194,81 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    async function loadSessions() {
+        const res = await apiFetch('/api/admin/sessions', { cache: 'no-store' });
+        if (!res.ok) return;
+        const sessions = await res.json();
+        sessionsBody.textContent = '';
+
+        if (!sessions || sessions.length === 0) {
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+            td.colSpan = 6;
+            td.style.textAlign = 'center';
+            td.style.padding = '24px';
+            td.textContent = 'No active sessions.';
+            tr.appendChild(td);
+            sessionsBody.appendChild(tr);
+            return;
+        }
+
+        sessions.forEach((s) => {
+            const tr = document.createElement('tr');
+
+            const userTd = document.createElement('td');
+            userTd.style.fontWeight = '700';
+            userTd.textContent = `${s.display_name} (${s.username})`;
+            if (s.is_current) {
+                const curBadge = document.createElement('span');
+                curBadge.className = 'badge badge-ok';
+                curBadge.style.marginLeft = '8px';
+                curBadge.textContent = 'This browser';
+                userTd.appendChild(curBadge);
+            }
+
+            const roleTd = document.createElement('td');
+            roleTd.textContent = s.role === 'admin' ? 'Admin' : 'Staff';
+
+            const ipTd = document.createElement('td');
+            ipTd.className = 'mono';
+            ipTd.textContent = s.ip_address || '-';
+
+            const inTd = document.createElement('td');
+            inTd.textContent = new Date(s.created_at).toLocaleString();
+
+            const expTd = document.createElement('td');
+            expTd.textContent = new Date(s.expires_at).toLocaleString();
+
+            const actTd = document.createElement('td');
+            const wrap = document.createElement('div');
+            wrap.className = 'table-actions';
+
+            const revokeBtn = document.createElement('button');
+            revokeBtn.type = 'button';
+            revokeBtn.className = 'btn btn-danger btn-sm';
+            revokeBtn.textContent = 'Sign Out';
+            revokeBtn.addEventListener('click', async () => {
+                if (!confirm(`Sign out session for "${s.display_name}" (${s.ip_address || 'unknown IP'})?`)) return;
+                const r = await apiFetch(`/api/admin/sessions/${encodeURIComponent(s.id)}/revoke`, { method: 'POST' });
+                if (r.ok) loadSessions();
+            });
+            wrap.appendChild(revokeBtn);
+            actTd.appendChild(wrap);
+
+            tr.appendChild(userTd);
+            tr.appendChild(roleTd);
+            tr.appendChild(ipTd);
+            tr.appendChild(inTd);
+            tr.appendChild(expTd);
+            tr.appendChild(actTd);
+            sessionsBody.appendChild(tr);
+        });
+    }
+
+    if (sessionsRefreshBtn) {
+        sessionsRefreshBtn.addEventListener('click', loadSessions);
+    }
+
     addUserBtn.addEventListener('click', () => {
         addUserErr.classList.add('hidden');
         addUserForm.reset();
@@ -169,6 +295,27 @@ document.addEventListener('DOMContentLoaded', () => {
             const err = await res.json().catch(() => ({}));
             addUserErr.textContent = err.detail || 'Could not create user.';
             addUserErr.classList.remove('hidden');
+        }
+    });
+
+    editUserForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        editUserErr.classList.add('hidden');
+        const res = await apiFetch(`/api/admin/users/${editTargetUserId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                display_name: editDisplayInput.value.trim(),
+                role: editRoleSelect.value,
+            }),
+        });
+        if (res.ok) {
+            editUserModal.classList.add('hidden');
+            loadUsers();
+        } else {
+            const err = await res.json().catch(() => ({}));
+            editUserErr.textContent = err.detail || 'Could not update user.';
+            editUserErr.classList.remove('hidden');
         }
     });
 
