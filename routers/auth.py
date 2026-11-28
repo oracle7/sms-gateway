@@ -18,6 +18,7 @@ from schemas import (
 from services.audit import record_audit
 from services.auth import (
     AuthContext,
+    compute_next_daily_cutoff_utc,
     extract_client_ip,
     require_auth,
     require_auth_no_refresh,
@@ -142,7 +143,11 @@ def login(
 
     raw_token, token_hash = generate_session_token()
     csrf_token = generate_csrf_token()
-    expires_at = now + timedelta(hours=settings.SESSION_MAX_AGE_HOURS)
+    expires_at = compute_next_daily_cutoff_utc(
+        now,
+        settings.CLINIC_TIMEZONE,
+        settings.SESSION_DAILY_CUTOFF_TIME,
+    )
     session = UserSession(
         user_id=user.id,
         token_hash=token_hash,
@@ -169,6 +174,7 @@ def login(
     db.commit()
     db.refresh(user)
 
+    cookie_max_age = max(60, int((expires_at - now).total_seconds()))
     response.set_cookie(
         key=settings.SESSION_COOKIE_NAME,
         value=raw_token,
@@ -176,15 +182,17 @@ def login(
         samesite="lax",
         secure=settings.SESSION_COOKIE_SECURE,
         path="/",
-        max_age=settings.SESSION_MAX_AGE_HOURS * 3600,
+        max_age=cookie_max_age,
     )
 
-    idle_expires = now + timedelta(minutes=settings.SESSION_IDLE_TIMEOUT_MINUTES)
+    idle_sec = max(0, settings.SESSION_IDLE_TIMEOUT_MINUTES) * 60
+    idle_expires = (now + timedelta(seconds=idle_sec)) if idle_sec > 0 else None
     return MeResponse(
         user=UserPublic.model_validate(user),
         csrf_token=csrf_token,
+        session_expires_at=expires_at,
         idle_expires_at=idle_expires,
-        idle_timeout_seconds=settings.SESSION_IDLE_TIMEOUT_MINUTES * 60,
+        idle_timeout_seconds=idle_sec,
         build_id=BUILD_ID,
         app_version=APP_VERSION,
     )
@@ -220,12 +228,14 @@ async def logout(
 @router.get("/me", response_model=MeResponse)
 def get_me(auth: AuthContext = Depends(require_auth_no_refresh)):
     last_act = ensure_utc(auth.session.last_activity_at) or utc_now()
-    idle_expires = last_act + timedelta(minutes=settings.SESSION_IDLE_TIMEOUT_MINUTES)
+    idle_sec = max(0, settings.SESSION_IDLE_TIMEOUT_MINUTES) * 60
+    idle_expires = (last_act + timedelta(seconds=idle_sec)) if idle_sec > 0 else None
     return MeResponse(
         user=UserPublic.model_validate(auth.user),
         csrf_token=auth.session.csrf_token,
+        session_expires_at=ensure_utc(auth.session.expires_at) or utc_now(),
         idle_expires_at=idle_expires,
-        idle_timeout_seconds=settings.SESSION_IDLE_TIMEOUT_MINUTES * 60,
+        idle_timeout_seconds=idle_sec,
         build_id=BUILD_ID,
         app_version=APP_VERSION,
     )
@@ -239,9 +249,12 @@ def heartbeat(
     now = utc_now()
     auth.session.last_activity_at = now
     db.commit()
+    idle_sec = max(0, settings.SESSION_IDLE_TIMEOUT_MINUTES) * 60
+    idle_expires = (now + timedelta(seconds=idle_sec)) if idle_sec > 0 else None
     return HeartbeatResponse(
-        idle_expires_at=now + timedelta(minutes=settings.SESSION_IDLE_TIMEOUT_MINUTES),
-        idle_timeout_seconds=settings.SESSION_IDLE_TIMEOUT_MINUTES * 60,
+        session_expires_at=ensure_utc(auth.session.expires_at) or now,
+        idle_expires_at=idle_expires,
+        idle_timeout_seconds=idle_sec,
     )
 
 

@@ -17,6 +17,9 @@ def test_threads_pagination_beyond_500_cap(isolated_env):
         for i in range(60):
             phone = f"+1929555{i:04d}"
             db.add(Thread(contact_phone=phone, created_at=now, updated_at=now))
+        db.flush()
+        for i in range(60):
+            phone = f"+1929555{i:04d}"
             for j in range(11):
                 db.add(
                     Message(

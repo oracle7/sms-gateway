@@ -6,8 +6,10 @@
 (function () {
     const body = document.body;
     const csrfToken = body.dataset.csrfToken || '';
-    const idleTimeoutSec = parseInt(body.dataset.idleTimeoutSec || '1800', 10);
-    let idleExpiresAtMs = Date.now() + idleTimeoutSec * 1000;
+    const idleTimeoutSec = parseInt(body.dataset.idleTimeoutSec || '0', 10);
+    const idleEnabled = idleTimeoutSec > 0;
+    const sessionExpiresAtMs = body.dataset.sessionExpiresAt ? Date.parse(body.dataset.sessionExpiresAt) : NaN;
+    let idleExpiresAtMs = idleEnabled ? (Date.now() + idleTimeoutSec * 1000) : Infinity;
     let lastHeartbeatSentMs = Date.now();
     let hasPendingInteraction = false;
     let isRedirecting = false;
@@ -44,14 +46,14 @@
             wipePhiAndRedirect('timeout');
             throw new Error('Session expired');
         }
-        if (!opts.headers.get('X-Background-Sync')) {
+        if (idleEnabled && !opts.headers.get('X-Background-Sync')) {
             idleExpiresAtMs = Date.now() + idleTimeoutSec * 1000;
         }
         return res;
     }
 
     async function sendHeartbeat() {
-        if (isRedirecting) return;
+        if (isRedirecting || !idleEnabled) return;
         try {
             const res = await apiFetch('/api/auth/heartbeat', { method: 'POST' });
             if (res.ok) {
@@ -70,7 +72,7 @@
     }
 
     function markUserInteraction() {
-        if (document.visibilityState !== 'visible') return;
+        if (!idleEnabled || document.visibilityState !== 'visible') return;
         hasPendingInteraction = true;
         if (Date.now() - lastHeartbeatSentMs >= 60000) {
             sendHeartbeat();
@@ -175,9 +177,15 @@
             });
         }
 
-        // 1-second idle timer check
+        // 1-second session cutoff & optional idle timer check
         setInterval(() => {
             if (isRedirecting) return;
+            if (!Number.isNaN(sessionExpiresAtMs) && Date.now() >= sessionExpiresAtMs) {
+                wipePhiAndRedirect('daily_cutoff');
+                return;
+            }
+            if (!idleEnabled) return;
+
             if (hasPendingInteraction && Date.now() - lastHeartbeatSentMs >= 60000) {
                 sendHeartbeat();
             }

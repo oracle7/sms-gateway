@@ -3,8 +3,9 @@ import hmac
 import ipaddress
 import logging
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
@@ -22,6 +23,32 @@ logger = logging.getLogger("uvicorn.error")
 class AuthContext:
     user: User
     session: UserSession
+
+
+def compute_next_daily_cutoff_utc(
+    now_utc: datetime,
+    tz_name: str = "America/New_York",
+    cutoff_hhmm: str = "00:05",
+) -> datetime:
+    """
+    Computes the next daily session cutoff timestamp in UTC for the clinic's
+    local timezone (default 00:05 America/New_York), handling DST transitions.
+    """
+    try:
+        hh_str, mm_str = cutoff_hhmm.strip().split(":", 1)
+        hh, mm = int(hh_str), int(mm_str)
+        if not (0 <= hh <= 23 and 0 <= mm <= 59):
+            raise ValueError
+    except Exception:
+        hh, mm = 0, 5
+
+    tz = ZoneInfo(tz_name)
+    local_now = ensure_utc(now_utc).astimezone(tz)
+    candidate = datetime(local_now.year, local_now.month, local_now.day, hh, mm, tzinfo=tz)
+    if candidate <= local_now:
+        next_day = local_now.date() + timedelta(days=1)
+        candidate = datetime(next_day.year, next_day.month, next_day.day, hh, mm, tzinfo=tz)
+    return candidate.astimezone(timezone.utc)
 
 
 def extract_client_ip(request: Request) -> str:
@@ -71,7 +98,7 @@ def _resolve_session(
 
     if expires_at and now > expires_at:
         session.revoked_at = now
-        session.revoked_reason = "absolute_timeout"
+        session.revoked_reason = "daily_cutoff"
         record_audit(
             db,
             action="auth.session_timeout",
@@ -80,13 +107,13 @@ def _resolve_session(
             actor_user=user,
             ip_address=extract_client_ip(request),
             user_agent=request.headers.get("user-agent"),
-            metadata={"reason": "absolute_timeout"},
+            metadata={"reason": "daily_cutoff"},
             commit=False,
         )
         db.commit()
         return None
 
-    if last_activity and (now - last_activity) > idle_delta:
+    if settings.SESSION_IDLE_TIMEOUT_MINUTES > 0 and last_activity and (now - last_activity) > idle_delta:
         session.revoked_at = now
         session.revoked_reason = "idle_timeout"
         record_audit(
@@ -216,7 +243,8 @@ async def verify_webhook_access(request: Request) -> Tuple[bytes, bool]:
 async def reap_expired_sessions_once(db: Session, broadcaster) -> int:
     """Revokes expired active sessions, records audit events, and closes their SSE streams."""
     now = utc_now()
-    idle_cutoff = now - timedelta(minutes=settings.SESSION_IDLE_TIMEOUT_MINUTES)
+    idle_enabled = settings.SESSION_IDLE_TIMEOUT_MINUTES > 0
+    idle_cutoff = now - timedelta(minutes=settings.SESSION_IDLE_TIMEOUT_MINUTES) if idle_enabled else None
     active_sessions = (
         db.query(UserSession)
         .filter(UserSession.revoked_at.is_(None))
@@ -229,8 +257,8 @@ async def reap_expired_sessions_once(db: Session, broadcaster) -> int:
         last_act = ensure_utc(sess.last_activity_at)
         reason = None
         if exp and now > exp:
-            reason = "absolute_timeout"
-        elif last_act and last_act < idle_cutoff:
+            reason = "daily_cutoff"
+        elif idle_enabled and idle_cutoff and last_act and last_act < idle_cutoff:
             reason = "idle_timeout"
 
         if reason:

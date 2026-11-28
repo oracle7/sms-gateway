@@ -15,7 +15,8 @@
       data-user-role="{{ user.role if user else '' }}"
       data-user-name="{{ user.display_name if user else '' }}"
       data-csrf-token="{{ csrf_token | default('') }}"
-      data-idle-timeout-sec="{{ idle_timeout_seconds | default(1800) }}">
+      data-idle-timeout-sec="{{ idle_timeout_seconds | default(0) }}"
+      data-session-expires-at="{{ session_expires_at | default('') }}">
 
     {% block content %}{% endblock %}
 

@@ -97,11 +97,11 @@ def verify_webhook_signature(
 
 
 def sanitize_webhook_payload(payload: Any) -> Any:
-    """Strips large base64 attachment payloads before storing in raw_webhooks."""
+    """Strips base64 attachment payloads before storing in raw_webhooks."""
     if isinstance(payload, dict):
         cleaned = {}
         for k, v in payload.items():
-            if k in ("data", "base64") and isinstance(v, str) and len(v) > 128:
+            if k in ("data", "base64") and isinstance(v, str) and v:
                 cleaned[k] = f"[stripped: {len(v)} chars]"
             else:
                 cleaned[k] = sanitize_webhook_payload(v)

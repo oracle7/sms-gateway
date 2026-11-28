@@ -229,6 +229,7 @@ def run_migration(
 
             if contact_phone not in created_threads:
                 db.add(Thread(contact_phone=contact_phone, created_at=now, updated_at=now))
+                db.flush()
                 created_threads.add(contact_phone)
 
             msg_ts = _parse_v2_timestamp(m["timestamp"])

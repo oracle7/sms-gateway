@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
@@ -6,7 +6,25 @@ from config import settings
 from database import ensure_utc, utc_now
 from main import app
 from models import UserSession
+from services.auth import compute_next_daily_cutoff_utc
 from tests.conftest import login_client
+
+
+def test_compute_next_daily_cutoff_utc():
+    # 10:00 AM EST (15:00 UTC in winter) -> next cutoff is tomorrow 00:05 EST (05:05 UTC)
+    morning_utc = datetime(2026, 1, 15, 15, 0, tzinfo=timezone.utc)
+    cutoff1 = compute_next_daily_cutoff_utc(morning_utc, "America/New_York", "00:05")
+    assert cutoff1 == datetime(2026, 1, 16, 5, 5, tzinfo=timezone.utc)
+
+    # 12:01 AM EST (05:01 UTC) -> next cutoff is same day 00:05 EST (05:05 UTC)
+    just_after_midnight_utc = datetime(2026, 1, 15, 5, 1, tzinfo=timezone.utc)
+    cutoff2 = compute_next_daily_cutoff_utc(just_after_midnight_utc, "America/New_York", "00:05")
+    assert cutoff2 == datetime(2026, 1, 15, 5, 5, tzinfo=timezone.utc)
+
+    # Summer EDT (UTC-4): 10:00 AM EDT -> next cutoff is tomorrow 00:05 EDT (04:05 UTC)
+    summer_utc = datetime(2026, 7, 15, 14, 0, tzinfo=timezone.utc)
+    cutoff3 = compute_next_daily_cutoff_utc(summer_utc, "America/New_York", "00:05")
+    assert cutoff3 == datetime(2026, 7, 16, 4, 5, tzinfo=timezone.utc)
 
 
 def test_login_lockout_and_unlock(isolated_env):
@@ -30,7 +48,7 @@ def test_login_lockout_and_unlock(isolated_env):
 
 
 def test_csrf_and_rbac_enforcement(isolated_env):
-    staff_client, staff_csrf = login_client("lori", "LoriStaffPass1234!")
+    staff_client, _staff_csrf = login_client("lori", "LoriStaffPass1234!")
 
     # Missing CSRF on mutating route
     no_csrf = staff_client.post("/api/contacts/", json={"phone_number": "9295551111", "name": "Alice"})
@@ -45,7 +63,36 @@ def test_csrf_and_rbac_enforcement(isolated_env):
     assert hidden_res.status_code == 403
 
 
-def test_concurrent_sessions_and_idle_timeout(isolated_env, monkeypatch):
+def test_default_overnight_cutoff_without_idle_timeout(isolated_env):
+    assert settings.SESSION_IDLE_TIMEOUT_MINUTES == 0
+    lori_client, _ = login_client("lori", "LoriStaffPass1234!")
+
+    # Even if last_activity_at is 6 hours old, Lori stays signed in during the workday
+    SessionLocal = isolated_env["SessionLocal"]
+    db = SessionLocal()
+    try:
+        sess = db.query(UserSession).order_by(UserSession.created_at.desc()).first()
+        sess.last_activity_at = utc_now() - timedelta(hours=6)
+        db.commit()
+    finally:
+        db.close()
+
+    assert lori_client.get("/api/threads").status_code == 200
+
+    # Once daily midnight cutoff (expires_at) passes, session is revoked
+    db = SessionLocal()
+    try:
+        sess = db.query(UserSession).order_by(UserSession.created_at.desc()).first()
+        sess.expires_at = utc_now() - timedelta(seconds=10)
+        db.commit()
+    finally:
+        db.close()
+
+    assert lori_client.get("/api/threads").status_code == 401
+
+
+def test_concurrent_sessions_and_optional_idle_timeout(isolated_env, monkeypatch):
+    monkeypatch.setattr(settings, "SESSION_IDLE_TIMEOUT_MINUTES", 30)
     c1, csrf1 = login_client("doctor", "DoctorPass1234!")
     c2, _csrf2 = login_client("doctor", "DoctorPass1234!")
 
@@ -70,7 +117,7 @@ def test_concurrent_sessions_and_idle_timeout(isolated_env, monkeypatch):
     db = SessionLocal()
     try:
         sess1_after = db.query(UserSession).order_by(UserSession.created_at.asc()).first()
-        assert ensure_utc(sess1_after.last_activity_at) == stale_ts.replace(tzinfo=ensure_utc(sess1_after.last_activity_at).tzinfo) or abs((ensure_utc(sess1_after.last_activity_at) - stale_ts).total_seconds()) < 2
+        assert abs((ensure_utc(sess1_after.last_activity_at) - stale_ts).total_seconds()) < 2
     finally:
         db.close()
 
@@ -78,7 +125,7 @@ def test_concurrent_sessions_and_idle_timeout(isolated_env, monkeypatch):
     hb = c1.post("/api/auth/heartbeat", headers={"X-CSRF-Token": csrf1})
     assert hb.status_code == 200
 
-    # Simulate expiry past 30 min
+    # Simulate expiry past optional idle timeout
     monkeypatch.setattr(settings, "SESSION_IDLE_TIMEOUT_MINUTES", 1)
     db = SessionLocal()
     try:

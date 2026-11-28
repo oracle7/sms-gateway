@@ -22,8 +22,9 @@ class Settings(BaseSettings):
     # Session & HIPAA Security
     SESSION_COOKIE_NAME: str = "smsgw_session"
     SESSION_COOKIE_SECURE: bool = True
-    SESSION_IDLE_TIMEOUT_MINUTES: int = 30
-    SESSION_MAX_AGE_HOURS: int = 12
+    CLINIC_TIMEZONE: str = "America/New_York"
+    SESSION_DAILY_CUTOFF_TIME: str = "00:05"
+    SESSION_IDLE_TIMEOUT_MINUTES: int = 0
     MAX_FAILED_LOGINS: int = 5
     LOCKOUT_MINUTES: int = 15
     MIN_PASSWORD_LENGTH: int = 12

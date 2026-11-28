@@ -27,15 +27,17 @@ class UserPublic(BaseModel):
 class MeResponse(BaseModel):
     user: UserPublic
     csrf_token: str
-    idle_expires_at: datetime
-    idle_timeout_seconds: int
+    session_expires_at: datetime
+    idle_expires_at: Optional[datetime] = None
+    idle_timeout_seconds: int = 0
     build_id: str
     app_version: str
 
 
 class HeartbeatResponse(BaseModel):
-    idle_expires_at: datetime
-    idle_timeout_seconds: int
+    session_expires_at: datetime
+    idle_expires_at: Optional[datetime] = None
+    idle_timeout_seconds: int = 0
 
 
 class ChangePasswordRequest(BaseModel):

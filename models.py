@@ -152,6 +152,7 @@ class Message(Base):
     attachments: Mapped[List["MessageAttachment"]] = relationship(
         "MessageAttachment", back_populates="message", passive_deletes=True
     )
+    thread: Mapped["Thread"] = relationship("Thread")
     sent_by: Mapped[Optional["User"]] = relationship("User", foreign_keys=[sent_by_user_id])
 
 

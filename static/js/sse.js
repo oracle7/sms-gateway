@@ -140,7 +140,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     return;
                 }
                 if (payload.type === 'session_expired') {
-                    window.ClinicApi.wipePhiAndRedirect('timeout');
+                    const reason = (payload.data && payload.data.reason) || 'timeout';
+                    window.ClinicApi.wipePhiAndRedirect(reason);
                     return;
                 }
                 if (payload.type === 'health_update') {

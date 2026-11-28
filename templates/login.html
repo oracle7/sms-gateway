@@ -16,6 +16,10 @@
     <div class="status-notice" role="status">
         Your session expired due to inactivity. Please sign in again.
     </div>
+    {% elif reason == 'daily_cutoff' %}
+    <div class="status-notice" role="status">
+        Your daily session ended automatically after midnight. Please sign in to start a new day.
+    </div>
     {% elif reason == 'logout' %}
     <div class="status-notice" role="status">
         You have been signed out safely.

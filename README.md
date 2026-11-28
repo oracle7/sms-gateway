@@ -4,7 +4,7 @@ Self-hosted, real-time SMS/MMS messaging hub built with **FastAPI**, **SQLite (W
 
 ## Key Features in v3.0
 
-- **HIPAA-Ready Access Control:** Individual user accounts (`admin` and `staff`), Argon2id password hashing, automatic lockout after failed attempts, server-side 30-minute inactivity timeout (with 2-minute countdown warning and automatic PHI cleanup), and private authenticated MMS attachment serving (`/api/attachments/{id}`).
+- **HIPAA-Ready Access Control:** Individual user accounts (`admin` and `staff`), Argon2id password hashing, automatic lockout after failed attempts, standardized overnight session reset (`00:05 America/New_York`, with optional server-configured idle timeout), and private authenticated MMS attachment serving (`/api/attachments/{id}`).
 - **Immutable Audit Trail (`audit_logs`):** Append-only SQLite table protected by `BEFORE UPDATE` / `BEFORE DELETE` triggers and a SHA-256 hash chain, with admin viewer, CSV/JSON export, and cryptographic integrity verification.
 - **Soft-Delete & Archiving:** Nothing clinical is ever permanently deleted. Conversations can be archived/unarchived (auto-reopening when a patient replies) and individual messages can be hidden (with admin-only inspection and restoration).
 - **Clean Schema & Paginated Threads:** Canonical E.164 phone normalization (preserving shortcodes and `unknown`), dedicated `threads` table, paginated `/api/threads` and per-thread message history without the v2 500-message cap.

@@ -5,6 +5,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from config import settings
+from database import ensure_utc
 from services.auth import AuthContext, get_optional_auth
 from version import APP_VERSION, BUILD_ID
 
@@ -13,13 +14,15 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
 def _base_context(auth: AuthContext) -> dict:
+    exp_utc = ensure_utc(auth.session.expires_at)
     return {
         "user": auth.user,
         "csrf_token": auth.session.csrf_token,
         "sms_did": settings.SMS_DID,
         "build_id": BUILD_ID,
         "app_version": APP_VERSION,
-        "idle_timeout_seconds": settings.SESSION_IDLE_TIMEOUT_MINUTES * 60,
+        "idle_timeout_seconds": max(0, settings.SESSION_IDLE_TIMEOUT_MINUTES) * 60,
+        "session_expires_at": exp_utc.isoformat() if exp_utc else "",
     }
 
 

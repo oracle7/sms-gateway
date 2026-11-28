@@ -42,7 +42,7 @@ server {
 }
 ```
 
-> **Dica:** Enquanto os certificados HTTPS ainda estiverem sendo finalizados, defina `SESSION_COOKIE_SECURE=false` no `.env`. Assim que o HTTPS estiver ativo, mude para `SESSION_COOKIE_SECURE=true` e reinicie o serviço.
+> **Dica:** Enquanto os certificados HTTPS ainda estiverem sendo finalizados, defina `SESSION_COOKIE_SECURE=false` no `.env`. Assim que o HTTPS estiver ativo, mude para `SESSION_COOKIE_SECURE=true` e reinicie o serviço. Por padrão, todas as sessões encerram automaticamente às `00:05` (`America/New_York`) sem desconexão por inatividade durante o expediente (`SESSION_IDLE_TIMEOUT_MINUTES=0`).
 
 ---
 
